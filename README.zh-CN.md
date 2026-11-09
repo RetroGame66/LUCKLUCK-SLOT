@@ -70,10 +70,18 @@ LUCKLUCK SLOT 把一台 BaseOS 掌机变成一整排卡带。相对上游，它�
 
 ## 下载
 
-发布包在 [Releases 页](https://github.com/RetroGame66/LUCKLUCK-SLOT/releases)。每次发布带：
+发布包在 [Releases 页](https://github.com/RetroGame66/LUCKLUCK-SLOT/releases)。每次发布带**四个**前端包 —— 先挑屏幕，再挑语言：
 
-- `66slot-frontend-System-*.zip` —— 前端 `System/` 目录树（中文构建）。2026-11-09 之前的发布沿用 `slot-frontend-System-*.zip` 这个名字，内容结构一样。
-- `66slot-frontend-System-*-en.zip` —— 同一棵树，用 `--features device,lang-en` 构建的英文版。
+| 包 | 屏幕 |
+|---|---|
+| `66slot-frontend-System-720480-V*.zip` | **720×480** —— RG SP、RG34XX、RG34XXSP 等 720 组 · 中文界面 |
+| `66slot-frontend-System-720480-V*-en.zip` | 同一棵树 · 英文界面 |
+| `66slot-frontend-System-640480-V*.zip` | **640×480** —— RG35XXSP 等 640 组 · 中文界面 |
+| `66slot-frontend-System-640480-V*-en.zip` | 同一棵树 · 英文界面 |
+
+640 组是 640×480，其余是 720×480。两个构建不是一个二进制加开关 —— 货架排布、面板底板、
+遮罩孔径、桌面图都按各自屏幕排，640 那棵也不带 MTP responder。
+
 - `slot-companion-toolbox-*-win64.zip` —— Windows 工具箱（见下），**不是**前端的一部分。
 - `SHA256SUMS.txt` —— 写卡之前先核对。
 
