@@ -120,9 +120,9 @@ GB and GBC run on the frontend's built-in Game Boy core, which is not user-switc
 Packages live on the [Releases page](https://github.com/RetroGame66/66slot/releases). Each release
 carries:
 
-- `66slot-v2026.*.zip` — the frontend `System/` tree (Chinese build). Earlier releases use the
-  `slot-frontend-System-*.zip` name; the contents are the same shape.
-- `66slot-v2026.*-en.zip` — the same tree built with `--features device,lang-en`.
+- `66slot-frontend-System-*.zip` — the frontend `System/` tree (Chinese build). Releases before
+  2026-11-09 use the `slot-frontend-System-*.zip` name; the contents are the same shape.
+- `66slot-frontend-System-*-en.zip` — the same tree built with `--features device,lang-en`.
 - `slot-companion-toolbox-*-win64.zip` — the Windows toolbox (§ below). Not part of the frontend.
 - `SHA256SUMS.txt` — check the zip against it before writing a card.
 

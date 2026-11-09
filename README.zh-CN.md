@@ -67,8 +67,8 @@ LUCKLUCK SLOT 把一台 BaseOS 掌机变成一整排卡带。相对上游，它�
 
 发布包在 [Releases 页](https://github.com/RetroGame66/66slot/releases)。每次发布带：
 
-- `66slot-v2026.*.zip` —— 前端 `System/` 目录树（中文构建）。更早的发布沿用 `slot-frontend-System-*.zip` 这个名字，内容结构一样。
-- `66slot-v2026.*-en.zip` —— 同一棵树，用 `--features device,lang-en` 构建的英文版。
+- `66slot-frontend-System-*.zip` —— 前端 `System/` 目录树（中文构建）。2026-11-09 之前的发布沿用 `slot-frontend-System-*.zip` 这个名字，内容结构一样。
+- `66slot-frontend-System-*-en.zip` —— 同一棵树，用 `--features device,lang-en` 构建的英文版。
 - `slot-companion-toolbox-*-win64.zip` —— Windows 工具箱（见下），**不是**前端的一部分。
 - `SHA256SUMS.txt` —— 写卡之前先核对。
 
