@@ -2,6 +2,11 @@
 
 [English](README.md) · **简体中文**
 
+<p align="center">
+  <img src="assets/66slot-title.webp" width="820"
+       alt="LUCKLUCK SLOT —— 运行在 BaseOS 上的十机种复古游戏前端，适配 Anbernic H700 系列掌机">
+</p>
+
 > **分支 `66-mods-640` —— 640×480 版。** `66-mods` 是 720×480 那棵树（RG SP、RG34XX、RG34XXSP
 > 与其余 720 组机器）；本分支是同一套前端按 **640×480** 面板排的（RG35XXSP 与 640 组）。
 > 两者不是差一个编译开关：货架排布、面板底板、卡座、遮罩孔径、桌面图、电源菜单全部按分辨率
@@ -21,9 +26,9 @@ LUCKLUCK SLOT（缩写 **66slot**）是运行在 **BaseOS** 上的多机种掌�
 本项目从上游 `slot` 派生，中间经历了一次底座切换、一次功能扩张和一次定名：
 
 1. **上游起源。** `slot`（“slot.”）是 Brandon T. Kowalski 为 Anbernic RG SP 写的**专属 GBA 单机**前端，MIT 许可，只跑 Game Boy Advance。2026-11，上游从 `BrandonKowalski/slot` 迁到 **`slot-cfw`** 组织，并扩展成以 Game Boy 为核心的定制固件；本 fork 仍基于下面那个 GBA 时期的提交。
-2. **派生（fork）。** 本仓库现为 **`RetroGame66/66slot`** 的 **`66-mods`** 分支，基于上游 `4345cb8b`（2026-09-11），由「你的六六」维护。仓库名在 2026-11-09 之前是 `RetroGame66/slot`。
+2. **派生（fork）。** 本仓库现为 **`RetroGame66/LUCKLUCK-SLOT`** 的 **`66-mods`** 分支，基于上游 `4345cb8b`（2026-09-11），由「你的六六」维护。仓库名在 2026-11-09 之前是 `RetroGame66/slot`。
 3. **底座切换。** 早期本 fork 部署在 **AGS-102**（Brandon Kowalski 基于 BaseOS 的 RG SP 分支）上。自 **2026-10-24** 起不再使用 AGS-102：其功能已并入上游 **BaseOS**，且 AGS-102 分支已停更，因此现在直接跑在 BaseOS 上。联机/网络功能移到了卡上脚本，使代码与底座无关。
-4. **定名。** **2026-10-26** 项目展示名定为 **LUCKLUCK SLOT**，缩写 **66slot**；**2026-11-09** 仓库名跟着改成 `66slot`。**代码里面没有跟着改**：crate 仍叫 `slot` / `slot-ui` / `slot-store`，卡上二进制仍是 `System/slot`，状态文件仍是 `slot.state`。这些是内部名，改了只会让已经在用的卡失效、对读者没有半点好处。
+4. **定名。** **2026-10-26** 项目展示名定为 **LUCKLUCK SLOT**，缩写 **66slot**；**2026-11-09** 仓库名跟着改成 `LUCKLUCK-SLOT`（全名进仓库，缩写留给包名前缀 `66slot-frontend-…` 和界面）。**代码里面没有跟着改**：crate 仍叫 `slot` / `slot-ui` / `slot-store`，卡上二进制仍是 `System/slot`，状态文件仍是 `slot.state`。这些是内部名，改了只会让已经在用的卡失效、对读者没有半点好处。
    一句话：**路径里的 “slot” 是代码名，不是旧名。**
 5. **范围。** 从 GBA 单机扩展到 **10 个机种**（见下）。
 
@@ -70,7 +75,7 @@ LUCKLUCK SLOT 把一台 BaseOS 掌机变成一整排卡带。相对上游，它�
 
 ## 下载
 
-发布包在 [Releases 页](https://github.com/RetroGame66/66slot/releases)。每次发布带：
+发布包在 [Releases 页](https://github.com/RetroGame66/LUCKLUCK-SLOT/releases)。每次发布带：
 
 - `66slot-frontend-System-*.zip` —— 前端 `System/` 目录树（中文构建）。2026-11-09 之前的发布沿用 `slot-frontend-System-*.zip` 这个名字，内容结构一样。
 - `66slot-frontend-System-*-en.zip` —— 同一棵树，用 `--features device,lang-en` 构建的英文版。
