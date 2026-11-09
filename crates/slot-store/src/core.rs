@@ -4,12 +4,36 @@ use std::path::Path;
 pub const SELECTED_CORE_FILE: &str = "System/selected_core.ini";
 
 /// Which emulator runs a cart. mGBA is the whole product's default; gpSP exists for the
-/// serial hardware mGBA's libretro build does not carry.
+/// serial hardware mGBA's libretro build does not carry. Snes / Nes are the console cores.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Core {
     #[default]
     Mgba,
     Gpsp,
+    /// Super Famicom / SNES. Basename `supafaust` -> `supafaust_libretro.so`; must match the
+    /// core actually on the card.
+    Snes,
+    /// Famicom / NES. Basename `fceumm` -> `fceumm_libretro.so`; must match the core on the card.
+    Nes,
+    /// Arcade and NeoGeo. Basename `fbneo` -> `fbneo_libretro.so`. One core serves both
+    /// machines; the two `System` variants decide the picture geometry (integer scale vs
+    /// stretched to 640x480).
+    Fbneo,
+    /// Mega Drive / Genesis. Basename `genesis_plus_gx` -> `genesis_plus_gx_libretro.so`.
+    /// ★ **Non-commercial only** (六六 2026-10-22 拍板): the core's licence forbids selling it,
+    /// and slot is given away, so it ships.
+    ///
+    /// One core, and it also covers Master System / Game Gear / SG-1000 — the machine is picked
+    /// off the rom itself, so `System::Md` is the shelf, not the only thing this can run.
+    Gpgx,
+    /// PlayStation. Basename `pcsx_rearmed` -> `pcsx_rearmed_libretro.so`. GPL-2.0.
+    Pcsx,
+    /// PC Engine / TurboGrafx-16. Basename `pce_fast` -> `pce_fast_libretro.so`. GPL-2.0.
+    ///
+    /// ★ Appended at the end like every variant before it: `index()` is the position in
+    /// `ALL`, which is the order the core picker's rows are in, and a card that has picked a
+    /// core must not have that pick move because a variant was inserted in the middle.
+    PceFast,
 }
 
 impl Core {
@@ -17,12 +41,30 @@ impl Core {
     /// `migrate_states` walks this rather than spelling the variant list out a second time,
     /// so a third core added here does not also have to be remembered at every call site
     /// that needs to tell a core's own directory apart from a cart's.
-    pub const ALL: [Core; 2] = [Core::Mgba, Core::Gpsp];
+    pub const ALL: [Core; 8] = [
+        Core::Mgba,
+        Core::Gpsp,
+        Core::Snes,
+        Core::Nes,
+        Core::Fbneo,
+        Core::Gpgx,
+        Core::Pcsx,
+        Core::PceFast,
+    ];
 
+    /// The ini's spelling, and **it is also the dylib's basename**: `dylib_name` pastes
+    /// `_libretro.so` onto this, so a variant added here must be spelled exactly as the core
+    /// on the card is.
     pub fn as_str(&self) -> &'static str {
         match self {
             Core::Mgba => "mgba",
             Core::Gpsp => "gpsp",
+            Core::Snes => "supafaust",
+            Core::Nes => "fceumm",
+            Core::Fbneo => "fbneo",
+            Core::Gpgx => "genesis_plus_gx",
+            Core::Pcsx => "pcsx_rearmed",
+            Core::PceFast => "pce_fast",
         }
     }
 
@@ -38,6 +80,12 @@ impl Core {
         match self {
             Core::Mgba => "mGBA",
             Core::Gpsp => "gpSP",
+            Core::Snes => "SFC 模拟器",
+            Core::Nes => "FC 模拟器",
+            Core::Fbneo => "FBNEO 街机",
+            Core::Gpgx => "MD 模拟器",
+            Core::Pcsx => "PS1 模拟器",
+            Core::PceFast => "PCE 模拟器",
         }
     }
 
@@ -45,6 +93,17 @@ impl Core {
         match s.trim().to_ascii_lowercase().as_str() {
             "mgba" => Some(Core::Mgba),
             "gpsp" => Some(Core::Gpsp),
+            "supafaust" => Some(Core::Snes),
+            "fceumm" => Some(Core::Nes),
+            "fbneo" => Some(Core::Fbneo),
+            "genesis_plus_gx" => Some(Core::Gpgx),
+            "pcsx_rearmed" => Some(Core::Pcsx),
+            // The spellings people actually type on a card. Only the unambiguous ones: a bare
+            // `pcsx` would also name `pcsx_rearmed`'s siblings if one were ever shipped, and a
+            // name we do not know is only worth falling back to the default.
+            "genesisplusgx" | "gpgx" | "genplusgx" => Some(Core::Gpgx),
+            "pcsx" | "pcsxrearmed" => Some(Core::Pcsx),
+            "pce" | "pcefast" | "pce_fast" => Some(Core::PceFast),
             _ => None,
         }
     }

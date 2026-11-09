@@ -173,9 +173,17 @@ pub fn init_label_config(root: &Path) {
 mod tests {
     use super::*;
 
+    /// The two tests that state `STRIP_TAGS` share it, so they share a lock: tests in one
+    /// process run alongside each other, and a flip from one landing inside the other's
+    /// assertions is a flake neither of them can see on its own.
+    static TAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn stripped_is_the_classic_behaviour() {
-        // No init call -> default strip = true.
+        let _guard = TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The default, stated rather than assumed: `keep_mode_preserves_tags` flips this
+        // same global and restores it, and the default is what this one is about.
+        set_strip_tags(true);
         assert_eq!(clean_label("Spider-Man 2 (USA)"), "Spider-Man 2");
         assert_eq!(
             clean_label("Pokemon - Ruby Version (USA, Europe) (Rev 2)"),
@@ -197,6 +205,7 @@ mod tests {
 
     #[test]
     fn keep_mode_preserves_tags() {
+        let _guard = TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_strip_tags(false);
         assert_eq!(clean_label("[中]魂斗罗"), "[中]魂斗罗");
         assert_eq!(
