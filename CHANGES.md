@@ -2,8 +2,8 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**150 files changed, 20,160 insertions(+), 1,351 deletions(-)** across the branch — 49 added, 97
-modified, 4 deleted. Some of them are this fork's notice and repository housekeeping rather than
+**307 files changed, 80,874 insertions(+), 4,209 deletions(-)** across the branch — 161 added, 136
+modified, 10 deleted. Some of them are this fork's notice and repository housekeeping rather than
 changes to the frontend (§12), which is what lets the tree stand on its own as a public fork of an
 MIT project.
 
@@ -11,6 +11,11 @@ The counts above were taken again after the 2026-10-02 work landed (this changel
 section, the helper scripts retargeted at the merged workspace root, the light-theme stand-in cart
 fix, the README brought back in line with all of it, and English write-ups for the 09-30, 10-01 and
 10-02 sections, which had been Chinese only); every section is in them.
+
+They were taken a second time on **2026-11-09**, when the month of work from 10-03 onward was folded
+in — the ten-machine expansion, the deck, the settings screen, the MTP responder and the boot
+opening. That is the jump from 20k to 80k lines: `slot-media` and `mtp-responder` are new crates, and
+the nine machines added to `slot-store` and `slot-ui` are real code rather than configuration.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
@@ -843,3 +848,156 @@ contain。**二进制不变** —— `bin/slot-zh` 仍是 `a356f93d…`，读 `t
 长期复用的贴图，都要问一句"它对主题敏感吗？切主题时谁负责重烘"。这次的坑正是**两条路径各修了
 一半**：`card_face` 有亮色逻辑但不需要重烘（卡面本来就随主题整批重建），占位卡需要重烘却没有
 亮色逻辑。
+
+
+---
+
+## 2026-10-03 → 2026-11-09 update
+
+> One month, folded in as one release. In this window the fork stopped being a GBA frontend: nine
+> more machines, a music player that grew into a deck, a settings screen, an MTP responder, and a
+> boot opening between the logo and the shelf. Written by subject rather than by commit, because
+> that is how it was built.
+
+### Ten machines off one folder tree
+
+`slot::core::System` now has ten variants — Advance, Game Boy, Game Boy Color, Famicom, Super
+Famicom, Mega Drive, PlayStation, PC Engine, Arcade and Neo Geo — and the shelf asks the card
+rather than a build flag. **The folder under `Games/` decides the machine** (`slot_store`'s
+`System::from_dir`), which is also why `Games/` is created with all ten subfolders at boot: a card
+that has them cannot file a rom into the wrong machine by accident.
+
+Each machine brings its own core, its own frame size and its own key seating. The seating is the
+part that is not obvious: on Neo Geo and Arcade the four face buttons are `GAME_C` / `GAME_D` in
+the new build rather than the upstream `GAME_X` / `GAME_Y` names, and the turbo keys follow them
+(`TURBO_C` / `TURBO_D`), because a remap file written for the old names would silently bind
+nothing.
+
+The frame buffer is allocated once, at **1024×576** — the largest frame anything in the set
+produces (PS1's high-resolution mode, SFC's wide mode), with room left for a future NDS — so
+changing machines never reallocates mid-session.
+
+Display settings split along the same line. The **aperture table is GBA-only** (the other machines
+cannot use a dot mask at all), while the consoles' scanlines are a separate switch that answers
+`scanline_state` — an LCD machine with a scanline ring was the bug that made this split necessary.
+
+### The deck（像素随身听）
+
+What began as a tape-shaped music screen became a deck with two faces and a disc player.
+
+- **Tape art.** The cassette is 226×135, and the card's own artwork is composited at the size the
+  cart actually shows (339×202, 1.5×), not at twice the face — measuring it at the face's own scale
+  is how the first version came out with a moulding twice too thick.
+- **The tape row reuses the shelf.** Short `Y` switches between the games and the tapes; the row is
+  the same ring, glide and favourites, only 1.8× larger and pitched at 400 px so the three stickers
+  read as three albums rather than one row of labels.
+- **The player is wired to the deck screen**: keys steer playback, the end of a track advances.
+  Lyrics come off `Music/Lyrics/` as `.lrc`; the row's cover is the CD sleeve from `Music/Covers/`.
+- **Two panels, one of them a real LCD.** The retro panel is a logical four-shade frame — 1-bit
+  threshold, then a mask, blown up by a whole number — and its grid is copied from the game
+  shader (a 3×3 right column plus bottom row, half grid and half paper) after two earlier attempts
+  drew "two dark blocks out of phase" instead of a grid. The grid's gap takes the paper colour, so
+  it follows the palette rather than darkening on its own.
+- **45 palettes** rotate through `PixelShift`; the spectrum is 32 bands; the layout follows the LCD
+  UI KIT down to the five square keys and the closed spectrum frame with its 45° bevel.
+- **Closing the lid while music plays** suppresses the idle power-off and wakes back into the
+  player, because a handheld that shuts the music off when you close it is a handheld you stop
+  carrying.
+
+### Cart art the player owns
+
+- **`System/Carts/carts.tsv`** — the per-machine shell colour table moved out of the binary: a card
+  can now carry its own shells, and the built-in table is the fallback rather than the rule.
+- **Flags and laminate.** A cart's face carries a flag and one of five sticker finishes; the draw
+  list has two variants so the laminate costs no extra pass.
+- **`Labels/` is back (2026-11-03).** It was removed on 10-28 in favour of whole-cart art, which
+  turned out to raise the bar for the players who were using it: "changing it was very
+  inconvenient". A `Labels/<machine>/<stem>.png` is pasted into the cart's recess (cover-fit, not
+  squashed); with no image the recess stays a flat colour. The folder is created with the rest of
+  the card again.
+
+### Settings, menu and the shelf's furniture
+
+- **Settings behind `MENU`**: ten rows, two per line, the caret on the direction keys and `A` to
+  change or open — clock, rescan, audio during fast-forward, idle power-off, fast-forward and rewind
+  gears, auto-resume on insert, auto-save on eject, boot picture, Wi-Fi.
+- **The HUD plate moved into the slot**: 360 px wide, 44 high, opaque, sitting in the cartridge
+  opening with the status strip pinned to its top edge, above the wallpaper. Two earlier passes had
+  it floating with a 6 px gap under the strip, which read as a second, unfitted object.
+- **The Wi-Fi / direct-connect page** is set at 32 px (`plate::page_face`) with 34 px row spacing
+  thrown out for 48, and its background is a translucent gauze rather than an opaque panel, so the
+  wallpaper shows through.
+- **With no disc, choosing 像素随身听** shakes the menu instead of sliding back to the shelf: a
+  silent return looks like a dropped input.
+- The power menu's default row is now *power off* rather than restart.
+
+### Input
+
+- **The stick is the D-pad.** `ABS_X` / `ABS_Y` are read on a normal boot too, not only in the
+  survey, so a stick that exists is always usable.
+- **34XXSP's axes were out of order** — `Z` / `RX` / `RY` / `RZ` reported in a different order than
+  the mask assumed. Re-ordered to `X` / `Y` / `RX` / `RY`, and calibrated against that board's real
+  ranges.
+- **L3 / R3** came back as brightness and blue-light +1, reading `0x139` / `0x13c` — what this board
+  actually sends, rather than the codes the mask had guessed.
+- **The trace** records `ABS` axes now (a `survey` column, named axes in `event_line`), which is
+  what found the two bugs above.
+- **The tape's keys were re-seated**: short `A` plays/pauses, long `A` stops back to 0:00, `B`
+  returns to the disc shelf, short `MENU` opens the disc-info page, `SELECT` does nothing here.
+  `MENU_HOLD_MS` is the one threshold, shared with the cart keys.
+
+### MTP, and the boot opening
+
+- **`mtp-responder`** answers the card's MTP traffic on `/dev/mtp_usb` beside the gadget script, so
+  a PC sees the card as a device in its file manager without the frontend owning a thread per
+  request.
+- **`System/boot_opening.slotvid`** plays between a user's own `Bootlogos/` picture and the shelf's
+  first frame — 64-byte header, 16-byte index per frame, decoded frame by frame rather than loaded
+  as a strip. Generated by SLOTVID STUDIO.
+
+### Boot time
+
+Font work carried a lot of this: the per-cart face font is subset to the characters that cart's
+name actually uses, and the cover and panel faces are loaded on first use rather than at start, so
+a card of 900 roms no longer pays for 900 names' worth of glyphs up front. The boot path is
+instrumented per stage, which is how each of those was measured rather than guessed.
+
+---
+
+## 2026-10-03 → 2026-11-09 更新（中文摘要）
+
+这一节是一个月的落地清单，按主题归并不按提交排序。
+
+**十机种。** `System` 从 GBA 一个扩到十个（GBA/GB/GBC/FC/SFC/MD/PS1/PCE/ARCADE/NEOGEO），
+机种由 `Games/` 下的**文件夹**判定，开机时十个子文件夹一起建好，放错楼层的机会就没有了。
+帧缓冲一次开在 **1024×576**（PS1 高分辨率、SFC 宽屏都装得下），换机种不再重分配。
+**孔径表只给掌机**（主机种用不了点阵遮罩），主机种的扫描线走独立开关 `scanline_state`。
+NEOGEO / ARCADE 的四个面键改叫 `GAME_C` / `GAME_D`，连发键跟着改成 `TURBO_C` / `TURBO_D` ——
+沿用旧名会让一份 remap 文件静默失效。
+
+**像素随身听。** 磁带 226×135，卡上贴图按**实显 1.5 倍**（339×202）合成，不是按面尺寸的 2 倍
+（第一版就是这么把模具画厚一倍的）。磁带排复用货架（同一个环、同一份收藏），短按 `Y` 在游戏与
+磁带之间切；Player 接进卡座屏，按键真控播放、播完自动下一轨；歌词取 `Music/Lyrics/`，封面取
+`Music/Covers/`。复古液晶面板是**逻辑四阶帧**（1 bit 阈值 + 遮罩，整数倍放大），格网照抄游戏
+着色器的 3×3（右列 + 下行，格与纸各半）—— 前两版画出来是"两块错相的暗块"，不是格网。
+合盖放歌屏蔽超时关机、唤醒回播放器。
+
+**卡带美术。** 壳色表外置到 `System/Carts/carts.tsv`，二进制退居兜底；卡面加标志与五种覆膜。
+`Labels/` **2026-11-03 恢复** —— 10-28 摘掉之后玩家反馈"改了很不方便"，现在有
+`Labels/<机种>/<名字>.png` 就贴进凹槽（等比裁满、不压扁），没有就纯色。
+
+**设置与家具。** 设置屏十项双列；HUD 板住进插卡口（360×44、实底），状态条贴其顶边、压在壁纸
+之上；WiFi / 直连页整页 32px（`page_face`）、行距 34→48，底改半透明纱；没碟时选「像素随身听」
+抖屏提示而不是静默回货架；电源菜单默认项改成关机。
+
+**输入。** 摇杆接成十字键（正常开机也开 ABS 节点）；34XXSP 的轴序实测后重排（`Z/RX/RY/RZ` →
+`X/Y/RX/RY`）并按该板量程校准；L3 / R3 认这块板真发的 `0x139` / `0x13c`，接成亮度 / 蓝光 +1；
+trace 现在录 ABS 轴 —— 上面两个坑都是它抓出来的。随身听键位重排：轻点 `A` 播放暂停、长按 `A`
+停止、`B` 回碟片货架、轻点 `MENU` 信息页、`SELECT` 在此屏空操作，长按阈值共用 `MENU_HOLD_MS`。
+
+**MTP 与开机转场。** `mtp-responder` 在 `/dev/mtp_usb` 上答 PC 的 MTP 请求，资源管理器里直接
+看到这张卡。`System/boot_opening.slotvid` 在开机图之后、货架首帧之前逐帧播放（64 字节头 +
+每帧 16 字节索引），素材由 SLOTVID STUDIO 生成。
+
+**开机时间。** 卡面字体按该卡名字实际用到的字做子集，封面与面板字体改成首次使用才加载，
+900 个游戏不再开一次机就付 900 个名字的字形成本。开机各阶段都打了计时，数字是量出来的。
