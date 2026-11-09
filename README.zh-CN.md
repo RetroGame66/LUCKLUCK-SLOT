@@ -1,5 +1,7 @@
 # LUCKLUCK SLOT（66slot）
 
+[English](README.md) · **简体中文**
+
 > **这是上游 `slot` 的修改版（fork），非官方版本。**
 > 原作 © Brandon T. Kowalski，MIT 许可；修改由 [@RetroGame66](https://github.com/RetroGame66)（你的六六）完成。
 > 上游仓库已于 2026-11 从 `BrandonKowalski/slot` 迁至 [slot-cfw/slot](https://github.com/slot-cfw/slot)，旧地址会重定向。

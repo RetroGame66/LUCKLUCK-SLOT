@@ -1,5 +1,7 @@
 # LUCKLUCK SLOT (66slot)
 
+**English** · [简体中文](README.zh-CN.md)
+
 > **This is a modified fork.** It is based on
 > [slot-cfw/slot](https://github.com/slot-cfw/slot) by **Brandon T. Kowalski** (MIT; upstream was
 > `BrandonKowalski/slot` until November 2026 and the old URL still redirects), with changes by
