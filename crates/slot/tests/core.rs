@@ -13,8 +13,15 @@ use slot_input::{Btn, RawEvent};
 use slot_retro::{ButtonMask, RetroCore};
 use slot_store::Core;
 
-fn rom(name: &str) -> PathBuf {
-    let p = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+/// A real GBA rom, written into a scratch directory that moves with the binary.
+///
+/// ⚠️ **This used to be `env!("CARGO_TARGET_TMPDIR")`** — a *compile-time* constant holding the
+/// build machine's absolute path. Built on Windows and pushed to the handheld, that directory
+/// does not exist there and the write fails on `NotFound`, which reads exactly like a core bug
+/// (2026-10-25: the first time this file ever ran on the device). A `TempDir` handed in by the
+/// caller is the same guarantee without the baked-in path.
+fn rom(dir: &Path, name: &str) -> PathBuf {
+    let p = dir.join(name);
     std::fs::write(&p, common::gba_rom()).expect("write rom");
     p
 }
@@ -34,9 +41,9 @@ fn the_vendored_core_is_preferred_over_the_mock() {
         return;
     };
     let d = common::tmp_root_with_real_carts(&[]);
-    let mut core = open_core_for(d.path(), Core::Mgba, &[dylib]);
+    let mut core = open_core_for(d.path(), Core::Mgba, slot_store::System::Gba, &[dylib]);
     assert!(
-        is_mgba(core.as_mut(), &rom("preferred.gba")),
+        is_mgba(core.as_mut(), &rom(d.path(), "preferred.gba")),
         "the mock ran with a vendored core sitting right there"
     );
 }
@@ -44,8 +51,13 @@ fn the_vendored_core_is_preferred_over_the_mock() {
 #[test]
 fn a_missing_core_falls_back_to_the_mock_rather_than_failing() {
     let d = common::tmp_root_with_real_carts(&[]);
-    let mut core = open_core_for(d.path(), Core::Mgba, &[PathBuf::from("no/such/core.dylib")]);
-    assert!(!is_mgba(core.as_mut(), &rom("missing.gba")));
+    let mut core = open_core_for(
+        d.path(),
+        Core::Mgba,
+        slot_store::System::Gba,
+        &[PathBuf::from("no/such/core.dylib")],
+    );
+    assert!(!is_mgba(core.as_mut(), &rom(d.path(), "missing.gba")));
 }
 
 /// A rom the core will not take has to reach the app as `Failed`. Anything else leaves the
@@ -58,7 +70,7 @@ fn a_rom_the_real_core_refuses_reports_failed() {
     };
     let d = common::tmp_root_with_carts(&["Broken"]);
     let emu = EmuHandle::spawn(
-        open_core_for(d.path(), Core::Mgba, &[dylib]),
+        open_core_for(d.path(), Core::Mgba, slot_store::System::Gba, &[dylib]),
         d.path().join("Games/Broken.gba"),
         StubSink::new().ring(),
         None,

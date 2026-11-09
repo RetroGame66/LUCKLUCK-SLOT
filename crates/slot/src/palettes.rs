@@ -398,3 +398,167 @@ pub const GB_MODEL_NAMES: [&str; 3] = ["DMG 经典绿", "GBP 暖白", "GBL 青"]
 pub const PAGE_COLS: usize = 3;
 pub const PAGE_ROWS: usize = 5;
 pub const PER_PAGE: usize = PAGE_COLS * PAGE_ROWS;
+
+// ── The LCD panel's own range: PixelShift ────────────────────────────────────────────────────
+//
+// **A subset of `GB_PALETTES`, not a second table.** The deck's retro-LCD panel wants a curated
+// set rather than all 343, and gambatte's `PixelShift` series is the one that reads as a screen
+// rather than as a plastic: hand-picked four-shade ramps, numbered `PS01`..`PS45` in the core's
+// own header, already in the table above with the `PixelShift ` prefix folded into `PS`.
+//
+// **41, not 45, and the four that are missing are named here rather than left as a surprise.**
+// The generator drops any entry whose four colours are not four *different* colours, and four of
+// the PixelShift ramps are two-colour (a background and a foreground, duplicated across the four
+// game colours): `PS02 Arduboy` and `PS35 MS-Dos` are pure black/white/green, `PS13 Game Pocket
+// Computer` pure black/white, `PS14 Game & Watch Ball` two greys. **On a four-shade LCD those are
+// the most legible schemes there are** — which is exactly why they are worth having and exactly
+// why the table cannot hold them.
+//
+// The count is therefore **not** the header's 45, and a caller that wants "the PixelShift set"
+// must be given this number rather than the header's.
+
+// 走一遍表、按 `PS` 前缀数出来的条目数，**不是**头文件的 45。
+pub const PIXELSHIFT: usize = 41;
+
+/// The `PS` entries of `GB_PALETTES`, in the core's own order, with the two-colour ramps
+/// folded back in — **45 in all, which is the number the header says**.
+///
+/// ★ **这张表 2026-10-06 被六六砍过一轮**：「把你标的丢信息那几个红色的拿掉」。
+///   判据不是审美，是**这套色板还装不装得下四阶的屏**（面板靠纸/EDGE/规则/墨四档说话：
+///   分区框是规则、唱到的那行是墨、其余行退一档、格网踩在纸与 EDGE 之间）——
+///   相邻两档挨得太近，这两档就等于一档。量法是 **CIE Lab 色差**，见
+///   `_scratch/shots_ramps_2026-10-06/`（45 套各渲一张 + 逐套的 ΔE）。
+///
+///   拿掉的两类：
+///   * **双色 4 套**（`PS02` `PS13` `PS14` `PS35`）：只有 2 档可挑，展成四阶就是
+///     `纸,纸,墨,墨` ⇒ 格网消失、框成实心黑条、没唱到的那几行和唱到的一样深。
+///     它们原先是 [`PIXELSHIFT_PAIRS`] 现场展宽的；连那半套东西一起删了。
+///   * **`PS37 Pip-Boy`**：四档齐全，但 `edge→rule` 只差 **ΔE 6.2** —— 框和正文一个深度。
+///     造型好看（暗屏 + 绿光），要救只能把中间两档拉开，而 `GB_PALETTES` 是**生成物**，
+///     手改会被下次生成冲掉。**要它就得在生成器里改。**
+///
+/// ⚠️ 留在表里的 `PS11 Game Boy Pocket` 是**擦边**的（`edge→rule` ΔE 8.0，正好在线上没被标红）。
+/// 要一起去掉，把它加进 [`DROPPED_BY_HAND`]。
+///
+/// 返回 owned 值而不是下标：这张表由生成器产出、按数字排序，调用方要的是色板本身。
+pub fn pixelshift() -> Vec<(&'static str, [[u8; 3]; 4])> {
+    let mut out: Vec<(&'static str, [[u8; 3]; 4])> = GB_PALETTES
+        .iter()
+        .filter(|(name, _)| name.starts_with("PS"))
+        .filter(|(name, _)| !DROPPED_BY_HAND.contains(&ramp_number(name).unwrap_or(0)))
+        .map(|(name, shades)| (*name, *shades))
+        .collect();
+    // The core numbers them, and a panel that showed them out of order would be a panel nobody
+    // could find a colour in. Sorting on the number rather than on the name: `PS10` sorts before
+    // `PS2` as text, and the header's own order is numeric.
+    //
+    // **The number is the digits after `PS`, not the rest of the name.** `name[2..]` on
+    // `"PS01 Arctic Green"` is `"01 Arctic Green"`, which does not parse, so the first version
+    // keyed every entry to `u32::MAX` and left the table's own order in place — with the four
+    // pairs appended at the end, which is exactly the out-of-order case this was written to
+    // prevent. The key takes the leading digits and stops at the first space.
+    out.sort_by_key(|(name, _)| ramp_number(name).unwrap_or(u32::MAX));
+    out
+}
+
+/// 一个 PS 名字里那个编号：**`PS` 之后到第一个空格**。
+///
+/// `"PS01 Arctic Green"` 的 `name[2..]` 是 `"01 Arctic Green"`，直接 parse 会失败 ——
+/// 于是整张表都会落到 `u32::MAX` 上、退回表自己的顺序，而那正是"按数字排"要防的事。
+/// **三处（排序、过滤、面板挑编号）必须用同一个切法**，所以它是一个函数，不是三次内联。
+fn ramp_number(name: &str) -> Option<u32> {
+    name.get(2..)?.split(' ').next()?.parse::<u32>().ok()
+}
+
+/// **手工从 Pixelshift 表里拿掉的编号**，连同拿掉的理由（全文见 [`pixelshift`] 的注释）。
+///
+/// 放在这里而不是直接删 `GB_PALETTES` 的条目：**那张表是生成物**，手删会在下次生成时回来。
+/// 这里是一层过滤，改了生成器之后把编号从这里去掉即可。
+pub const DROPPED_BY_HAND: [u32; 1] = [
+    37, // PS37 Pip-Boy：edge→rule 只差 ΔE 6.2，框和正文一个深度
+];
+
+// ── 面板轮换的色板 ─────────────────────────────────────────────────────────────────────────
+
+/// 面板轮换走的就是 [`pixelshift`] 的**全量**（六六 2026-10-06：「色板全量推上来」）。
+///
+/// ⚠️ **这里曾经是第一轮收敛出来的 8 套**（`DECK_RAMPS`：默认绿/冷绿/中性灰/暖金/蓝/红/暗屏紫/彩虹），
+///   理由是"45 套里 4 套双色 + 2 套中间两档分不开"。那个理由仍然成立，但**双色与糊档已经在
+///   [`pixelshift`] 里拿掉了**（见那里的 `DROPPED_BY_HAND`），所以剩下的 40 套都是四阶齐全、
+///   挨得开的那一批 —— 再挑一遍就只是我的偏好，不是他的需求。
+///
+/// 保留一个函数而不是让调用方直接调 [`pixelshift`]：面板的色板与游戏那边**同源不同用**
+/// （游戏要全集、要能挑），而"面板拿哪一套"这件事将来若再变，只改这一处。
+pub fn deck_ramps() -> Vec<(&'static str, [[u8; 3]; 4])> {
+    pixelshift()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **表里 41 条，能用 40 条** —— 差的那一条是 [`DROPPED_BY_HAND`]（PS37）。
+    /// 两个数字都写出来，是因为把 41 当成"能轮换的套数"正是这一轮要防的错。
+    #[test]
+    fn the_ps_ramps_are_41_in_the_table_and_40_usable() {
+        let in_table = GB_PALETTES
+            .iter()
+            .filter(|(name, _)| name.starts_with("PS"))
+            .count();
+        assert_eq!(in_table, PIXELSHIFT, "表里的 PS 条目数");
+        assert_eq!(
+            pixelshift().len(),
+            40,
+            "41 条减去手工拿掉的 {} 条",
+            DROPPED_BY_HAND.len()
+        );
+        for n in DROPPED_BY_HAND {
+            assert!(
+                !pixelshift().iter().any(|(name, _)| ramp_number(name) == Some(n)),
+                "PS{n:02} 该被 DROPPED_BY_HAND 滤掉"
+            );
+        }
+    }
+
+    /// Numeric order, not text order: `PS10` before `PS2` is what a string sort gives, and a panel
+    /// showing the ramps out of the core's order is a panel nobody can find a colour in.
+    #[test]
+    fn the_ramps_come_out_in_the_cores_own_numeric_order() {
+        // ⚠️ **基准是"表里真有的那些"**，不是 `1..=45`：生成器本来就丢掉了四个双色编号
+        //    （`PS02` `PS13` `PS14` `PS35`），拿 1..=45 当基准会把这四条算成"缺了"。
+        let mut want: Vec<u32> = GB_PALETTES
+            .iter()
+            .filter(|(name, _)| name.starts_with("PS"))
+            .filter_map(|(name, _)| ramp_number(name))
+            .filter(|n| !DROPPED_BY_HAND.contains(n))
+            .collect();
+        want.sort_unstable();
+        let got: Vec<u32> = pixelshift()
+            .iter()
+            .filter_map(|(name, _)| ramp_number(name))
+            .collect();
+        assert_eq!(got, want, "数字序，不是字符串序（PS10 不应排在 PS2 前面）");
+    }
+
+    /// Every ramp the panel can be given has four distinct shades **or** is one of the pairs —
+    /// because the panel writes one index per pixel from a 0..3 range, and a three-colour ramp
+    /// would draw a level that no pixel could select.
+    #[test]
+    fn every_ps_ramp_selects_at_most_the_colours_it_declares() {
+        for (name, shades) in pixelshift() {
+            let distinct = {
+                let mut seen = Vec::new();
+                for s in shades {
+                    if !seen.contains(&s) {
+                        seen.push(s);
+                    }
+                }
+                seen.len()
+            };
+            assert!(
+                distinct == 4 || distinct == 2,
+                "{name} 有 {distinct} 种颜色，四阶面板只能画 4 或 2 种"
+            );
+        }
+    }
+}

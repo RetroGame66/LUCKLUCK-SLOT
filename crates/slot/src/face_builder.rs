@@ -97,7 +97,27 @@ impl ShelfFaceFiller {
             .name("slot-shelf-faces".into())
             .spawn(move || {
                 while let Ok((i, cart)) = inbox.recv() {
-                    if outbox.send((i, cart_face(&cart))).is_err() {
+                    // **The music row is `cd_face`, not `cart_face`.** A disc reaches the row as
+                    // a `Cart` whose rom is its first track (see `App::disc_row`), so "is this
+                    // the music row" is "is its rom an audio file" — a game rom never is. This is
+                    // the same rule `Frontend::face_for` applies on the frame path, and the two
+                    // *must* agree: they are one question asked by the two halves of the same
+                    // pipeline. Left as `cart_face`, the visible window is right (it is built by
+                    // `face_for`) while every sleeve that scrolls in behind it is a cartridge
+                    // drawn at sleeve geometry — the row is correct on the frame it appears and
+                    // wrong the moment it moves, which is exactly the bug this fixes.
+                    let face = if slot_media::Track::is_track(&cart.rom) {
+                        let (cw, ch) = slot_ui::cd_cover_size();
+                        let cover = cart
+                            .label
+                            .as_deref()
+                            .and_then(|p| slot_ui::cd_cover(p, cw, ch))
+                            .unwrap_or_default();
+                        slot_ui::cd_face(&cover, &slot_ui::cd::SHELL, None)
+                    } else {
+                        cart_face(&cart)
+                    };
+                    if outbox.send((i, face)).is_err() {
                         return;
                     }
                 }

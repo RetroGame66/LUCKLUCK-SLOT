@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use super::evdev::{
-    code_to_btn, device_name, pick_devices, Ev, ABS_HAT0X, ABS_HAT0Y, EV_ABS, EV_KEY, EV_SW, SW_LID,
+    abs_axis_name, code_to_btn, device_name, pick_devices, Ev, EV_ABS, EV_KEY, EV_SW, SW_LID,
 };
 
 /// Set to anything but `0` to write the trace. Off by default: it is a bring-up tool, and it
@@ -27,6 +27,8 @@ pub fn enabled() -> bool {
 /// fixes, so the survey has to show the nodes that were passed over and why they looked
 /// uninteresting.
 pub fn survey(dev: &Path, sys: &Path) -> Vec<String> {
+    // The trace wants everything: a stick wired as its own ABS-only node is "opened" here so
+    // the player sees it was caught, not skipped and silent.
     let opened = pick_devices(dev, sys);
     let Ok(entries) = std::fs::read_dir(dev) else {
         return vec![format!("no {} to survey", dev.display())];
@@ -58,10 +60,11 @@ pub fn survey(dev: &Path, sys: &Path) -> Vec<String> {
                     .unwrap_or_else(|_| "-".to_string())
             };
             format!(
-                "{file} {state} name={:?} key=[{}] sw=[{}]",
+                "{file} {state} name={:?} key=[{}] sw=[{}] abs=[{}]",
                 device_name(sys, node),
                 cap("key"),
-                cap("sw")
+                cap("sw"),
+                cap("abs")
             )
         })
         .collect()
@@ -73,10 +76,10 @@ pub fn event_line(node: &str, ms: u128, ev: Ev) -> String {
     let btn = match ev.kind {
         EV_KEY => code_to_btn(ev.code).map_or_else(|| "unmapped".to_string(), |b| format!("{b:?}")),
         EV_SW if ev.code == SW_LID => "Lid".to_string(),
-        // The d-pad. Named by the axis rather than by the direction, because which end of it
-        // is pressed is the sign of the value on the same line.
-        EV_ABS if ev.code == ABS_HAT0X => "hat0x".to_string(),
-        EV_ABS if ev.code == ABS_HAT0Y => "hat0y".to_string(),
+        // An axis. Named by the axis code rather than by the direction, because which end of
+        // it is pressed is the sign of the value on the same line — and a stick the table does
+        // not know yet still has to show its number so a bring-up can see it.
+        EV_ABS => abs_axis_name(ev.code).map(|n| n.to_string()).unwrap_or_else(|| format!("abs_{:#x}", ev.code)),
         _ => "ignored".to_string(),
     };
     format!(

@@ -5,9 +5,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use slot_input::{Btn, InputSource, Millis, RawEvent};
+use slot_power::has_bit;
 
 use super::evdev::{
-    decode, device_name, pick_devices, to_raw, Ev, Hat, EVENT_BYTES, EV_ABS, EV_SYN,
+    decode, device_name, pick_devices, to_raw, Ev, Hat, Stick, AxisMap, ABS_X, ABS_Y, ABS_RX,
+    ABS_RY, EVENT_BYTES, EV_ABS, EV_SYN,
 };
 use super::trace;
 
@@ -53,6 +55,8 @@ impl DeviceInput {
 
     fn open_traced(dev: &Path, sys: &Path, trace: Option<Arc<Trace>>) -> Self {
         let pending: Arc<Mutex<Vec<RawEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        // The stick (a node advertising a gamepad axis) is opened in normal operation, so the
+        // menus are driven with it — not only while tracing.
         for node in pick_devices(dev, sys) {
             eprintln!(
                 "slot: input {} ({})",
@@ -62,9 +66,18 @@ impl DeviceInput {
             let queue = pending.clone();
             let name = node.display().to_string();
             let trace = trace.clone();
+            // Pick the axis translation for this node from its own capability bits, not a model
+            // name: a node advertising `ABS_X/Y` drives the sticks the conventional way, while one
+            // that reports only `ABS_Z/RX/RY/RZ` (RG34XXSP, see the 2026-11-03 stick-probe) needs
+            // them rearranged. A standard board is therefore never touched.
+            let axis_map: &AxisMap = if node_supports_xy(sys, &node) {
+                &AxisMap::IDENTITY
+            } else {
+                &AxisMap::RG34XXSP
+            };
             let spawned = std::thread::Builder::new()
                 .name(format!("slot-input-{name}"))
-                .spawn(move || read_node(&node, &queue, trace.as_deref()));
+                .spawn(move || read_node(&node, &queue, trace.as_deref(), axis_map));
             if let Err(e) = spawned {
                 eprintln!("slot: input {name}: {e}");
             }
@@ -80,13 +93,14 @@ impl DeviceInput {
 
 /// Until the node goes away. The threads are never joined: the process ends by powering the
 /// device off, and a reader blocked on a button nobody pressed has nothing to unwind.
-fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
+fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>, axis_map: &AxisMap) {
     let label = node
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| node.display().to_string());
     // One per node: the axes are that node's, and a second pad would have its own.
     let mut hat = Hat::default();
+    let mut stick = Stick::default();
     let mut file = match File::open(node) {
         Ok(f) => f,
         Err(e) => {
@@ -114,8 +128,23 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
                 trace.event(&label, ev);
             }
             match ev.kind {
-                // The d-pad, which needs the axis it arrived on to say what it released.
-                EV_ABS => events.extend(hat.feed(ev)),
+                // The d-pad (a hat) and the analog stick (its own axes) are both EV_ABS but
+                // decode differently: the hat is digital, the stick analog, so each keeps its
+                // own state.
+                EV_ABS => {
+                    // Translate the board's raw axis layout into the one `Stick` expects before
+                    // routing it. A node advertising `ABS_X/Y` (the conventional `X/Y`+`RX/RY`
+                    // sticks) uses the identity map; one that reports `ABS_Z/RX/RY/RZ` with no
+                    // `X/Y` (RG34XXSP, see the 2026-11-03 stick-probe) is rearranged here so no
+                    // axis is dropped and none is read as the wrong direction.
+                    let code = axis_map.map(ev.code);
+                    let ev = Ev { code, ..ev };
+                    if code == ABS_X || code == ABS_Y || code == ABS_RX || code == ABS_RY {
+                        events.extend(stick.feed(ev));
+                    } else {
+                        events.extend(hat.feed(ev));
+                    }
+                }
                 _ => events.extend(to_raw(ev)),
             }
         }
@@ -127,6 +156,22 @@ fn read_node(node: &Path, queue: &Mutex<Vec<RawEvent>>, trace: Option<&Trace>) {
             .unwrap_or_else(|e| e.into_inner())
             .extend(events);
     }
+}
+
+/// Whether an input node advertises `ABS_X` or `ABS_Y` among its absolute axes. Boards that wire
+/// the sticks conventionally (`ABS_X/Y` + `ABS_RX/RY`) report these; the RG34XXSP does not and
+/// instead uses `ABS_Z/RX/RY/RZ`, which is the signal used to pick its axis map. The read is the
+/// same capability `pick_devices` already probes to decide whether to open the node.
+fn node_supports_xy(sys: &Path, node: &Path) -> bool {
+    let Some(name) = node.file_name() else {
+        return false;
+    };
+    let abs = std::fs::read_to_string(sys.join(name).join("device/capabilities/abs"));
+    let Some(abs) = abs.ok() else {
+        // No capability to read: behave as the conventional board rather than risk dropping axes.
+        return true;
+    };
+    has_bit(&abs, ABS_X) || has_bit(&abs, ABS_Y)
 }
 
 /// The trace file and the clock its lines are stamped against, shared by every reader thread

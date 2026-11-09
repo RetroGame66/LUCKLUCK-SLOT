@@ -59,7 +59,7 @@ fn a_mock_frame_keeps_its_colours_through_the_game_pass() {
     let src = mock_frame(7);
 
     c.begin_frame();
-    c.upload_game(&src);
+    c.upload_game(&src, SRC_W, SRC_H);
     c.draw_game();
     let frame = c.read_frame();
 
@@ -94,7 +94,7 @@ fn a_saved_frame_arrives_intact_on_its_screenshot() {
     };
     let src = mock_frame(13);
     let d = tempfile::tempdir().expect("tempdir");
-    let ring = StateRing::new(d.path(), Core::Mgba, "Mock");
+    let ring = StateRing::legacy(d.path(), Core::Mgba, "Mock");
     let stamp = "2026-08-09_14-32-05";
     ring.push(b"state", &thumb::png(&src, SRC_W, SRC_H).expect("encode"), stamp)
         .expect("push");
@@ -131,7 +131,7 @@ fn the_switcher_magnifies_its_screenshot_without_resampling_it() {
     };
     let src = mock_frame(21);
     let d = tempfile::tempdir().expect("tempdir");
-    let ring = StateRing::new(d.path(), Core::Mgba, "Mock");
+    let ring = StateRing::legacy(d.path(), Core::Mgba, "Mock");
     ring.push(
         b"state",
         &thumb::png(&src, SRC_W, SRC_H).expect("encode"),

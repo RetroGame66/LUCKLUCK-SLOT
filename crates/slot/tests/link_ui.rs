@@ -1,6 +1,6 @@
 //! The in-game menu and the link it starts.
 //!
-//! Nothing here shells out to `ags-net` or touches a network interface: every starter is
+//! Nothing here shells out to `slotlink.sh` or touches a network interface: every starter is
 //! built through `LinkStarter::spawn_with`, whose slow parts are injected. The one test that
 //! needs a real `TcpLink` makes one over loopback, because `LinkProgress::Ready` carries a
 //! transport and there is no other way to have one.
@@ -81,7 +81,9 @@ fn fake_rows(app: &mut App) -> Vec<(TexId, u32, u32)> {
     let rows: Vec<(TexId, u32, u32)> = (0..GameRow::ALL.len())
         .map(|i| (TexId::from_raw(700 + i), 120 + 40 * i as u32, 40))
         .collect();
-    app.set_game_menu_faces(rows.clone());
+    // Two rows now: the idle faces and the hot (highlighted) ones. This test only ever
+        // reads the idle widths, so the hot row is empty.
+        app.set_game_menu_faces(rows.clone(), Vec::new());
     rows
 }
 
@@ -137,9 +139,9 @@ fn the_game_menu_does_not_open_on_the_shelf() {
     app.apply(Action::GameMenu);
     assert!(!app.game_menu_open(), "the shelf raised the in-game menu");
     assert!(matches!(app.phase(), Phase::Shelf));
-    app.apply(Action::OpenAbout);
+    app.apply(Action::OpenMenu);
     assert!(
-        matches!(app.phase(), Phase::About { .. }),
+        matches!(app.phase(), Phase::Menu { .. }),
         "the shelf lost its About screen"
     );
 }
@@ -323,7 +325,7 @@ fn b_during_the_radio_step_does_not_hand_the_game_back_early() {
     let (release, held) = channel::<()>();
     app.start_link(
         LinkStarter::spawn_with(
-            // Stands in for the five seconds `ags-net link` can take, and for the fact that
+            // Stands in for the five seconds `slotlink.sh link` can take, and for the fact that
             // nothing may interrupt it.
             Box::new(move |_| {
                 held.recv().expect("released");

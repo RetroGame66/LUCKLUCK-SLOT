@@ -234,6 +234,9 @@ fn the_pad_maps_by_the_codes_the_device_sends() {
         (115, Btn::VolUp),
         (114, Btn::VolDown),
         (116, Btn::Power),
+        // 摇杆按下：这块板发的是 BTN_TR2 / BTN_MODE，不是标准的 BTN_THUMBL/THUMBR。
+        (0x139, Btn::L3),
+        (0x13c, Btn::R3),
     ];
     for (code, want) in expected {
         assert_eq!(
@@ -325,4 +328,81 @@ fn a_hat_axis_is_traced_as_the_axis_it_is() {
     );
     assert!(line.contains("hat0y"), "{line}");
     assert!(!line.contains("ignored"), "{line}");
+}
+
+/// A stick wired as its own ABS-only node used to be invisible to the normal boot. It is now
+/// opened in normal operation so the menus can be driven with the stick, not only while tracing.
+#[test]
+fn an_abs_only_stick_node_is_opened_on_a_normal_boot() {
+    let d = tempfile::tempdir().unwrap();
+    let (dev, sys) = (d.path().join("dev/input"), d.path().join("sys/class/input"));
+    write(&dev.join("event3"), "");
+    write(&sys.join("event3/device/name"), "adc_joystick\n");
+    // ABS_X, 0x00: bit 0, which `has_bit` reads from the LAST word. No keys at all.
+    write(&sys.join("event3/device/capabilities/abs"), "0 0 0 0 1\n");
+    let picked = pick_devices(&dev, &sys);
+    assert_eq!(
+        picked,
+        [dev.join("event3")],
+        "the stick node was skipped on a normal boot"
+    );
+}
+
+/// The whole point of the trace is that a code nobody has seen before still lands in the log
+/// by number, so a delegated player's recording is enough to add it.
+#[test]
+fn an_unknown_abs_axis_is_traced_by_its_number() {
+    let known = slot::input::trace::event_line(
+        "event3",
+        4,
+        slot::input::evdev::Ev {
+            kind: slot::input::evdev::EV_ABS,
+            code: 0x00,
+            value: 32767,
+        },
+    );
+    assert!(known.contains("abs_x"), "{known}");
+    let unknown = slot::input::trace::event_line(
+        "event3",
+        5,
+        slot::input::evdev::Ev {
+            kind: slot::input::evdev::EV_ABS,
+            code: 0x06,
+            value: 1,
+        },
+    );
+    assert!(unknown.contains("abs_0x6"), "{unknown}");
+}
+
+/// An analog stick is mapped onto the d-pad directions. A third of full-scale presses, back
+/// inside a sixth releases, and rolling to the other side lets go of the old direction first.
+#[test]
+fn the_stick_maps_onto_the_d_pad_directions() {
+    let mut stick = slot::input::evdev::Stick::default();
+    let ev = |code, value| slot::input::evdev::Ev {
+        kind: slot::input::evdev::EV_ABS,
+        code,
+        value,
+    };
+    // Measured on the real board (stick-probe, 2026-11-02): the sticks report on
+    // ABS_RX/ABS_RY (0x03/0x04) with a full scale of ±4096, not the kernel's ±32767 default.
+    const EDGE: i32 = 4096 / 3;
+    // Push right past the edge.
+    assert_eq!(stick.feed(ev(0x03, EDGE)), vec![RawEvent::Down(Btn::Right)]);
+    // Ease back but stay outside the dead zone: nothing changes.
+    assert!(stick.feed(ev(0x03, EDGE * 2 / 3)).is_empty());
+    // Return to centre: release.
+    assert_eq!(stick.feed(ev(0x03, 0)), vec![RawEvent::Up(Btn::Right)]);
+    // Push left past the edge.
+    assert_eq!(stick.feed(ev(0x03, -EDGE)), vec![RawEvent::Down(Btn::Left)]);
+    // Roll straight through centre to the right: old direction releases, new presses.
+    assert_eq!(
+        stick.feed(ev(0x03, EDGE)),
+        vec![RawEvent::Up(Btn::Left), RawEvent::Down(Btn::Right)]
+    );
+    // The vertical axis is independent, and on this board it is ABS_RY (0x04).
+    assert_eq!(stick.feed(ev(0x04, EDGE)), vec![RawEvent::Down(Btn::Down)]);
+    assert_eq!(stick.feed(ev(0x04, 0)), vec![RawEvent::Up(Btn::Down)]);
+    // A hat axis still goes to the hat, not the stick.
+    assert_eq!(stick.feed(ev(0x10, -1)), Vec::<RawEvent>::new());
 }

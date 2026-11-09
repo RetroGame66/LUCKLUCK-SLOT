@@ -7,7 +7,12 @@ use slot_store::{
 
 /// What a save, a load or a flush needs from the emulator. The core runs on a worker thread
 /// and nothing above this trait knows that.
-pub trait Snapshot {
+///
+/// 2026-11-07：`: Send` 是因为整机启动时 `Frontend`（连同 `App.snapshot`）要在后台线程
+/// 里整体构造完再 join 回主线程 —— 见 `device_app::run` 的并行启动。快照只在进游戏之后
+/// 才被装进 `App`，开机那一刻它恒为 `None`，所以这只是类型层的约束，行为不变。
+/// 唯一的实现者 `EmuSnapshot` 本身就是 `Sender<Cmd>` + `Arc<Shared>`，早已跨线程。
+pub trait Snapshot: Send {
     fn state(&self) -> Option<Vec<u8>>;
     fn save_ram(&self) -> Option<Vec<u8>>;
     /// The last frame the core produced, PNG encoded. Encoded on the worker, which is where

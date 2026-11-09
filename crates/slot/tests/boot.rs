@@ -116,7 +116,25 @@ fn seating_a_cart_preserves_the_levels_already_in_the_file() {
             // whole state out, so a field added without them is a build error — which is how
             // this one was found.
             mode: Mode::Dark,
+            look: 0,
+            doze_min: slot_store::DOZE_MIN_DEFAULT,
+            shelf_badge: slot_store::SHELF_BADGE_DEFAULT,
+            ff_speed: slot_store::FF_SPEED_DEFAULT,
+            rewind_speed: slot_store::REWIND_SPEED_DEFAULT,
+            ff_sound: slot_store::FF_SOUND_DEFAULT,
             favorites: std::collections::BTreeSet::new(),
+            keymap: std::collections::BTreeMap::new(),
+            keymaps: Default::default(),
+            keymap_mode: false,
+            turbo_hz: slot_store::TURBO_HZ_DEFAULT,
+            ui_sfx: slot_store::UI_SFX_DEFAULT,
+            art_source: slot_store::ART_SOURCE_DEFAULT,
+            // ✓ 2026-11-01 补：`SlotState` 后来多了「插卡自动读档 / 退卡自动存档」两项
+            // （设置屏 §「自动」那两行），这个字面量没跟着长，于是整个 `boot` 测试目标
+            // 编译不过 —— 全量 `cargo test` 到这里就停，前面 40 多个目标都没机会跑。
+            // 用常量而不是 `true`/`false`：这两行想表达的正是"和默认值一样"。
+            insert_resume: slot_store::INSERT_RESUME_DEFAULT,
+            eject_save: slot_store::EJECT_SAVE_DEFAULT,
         },
     )
     .unwrap();

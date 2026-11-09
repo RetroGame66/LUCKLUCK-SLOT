@@ -169,7 +169,7 @@ fn classify(e: &std::io::Error) -> LinkFail {
     }
 }
 
-/// Bring the private network up. Injectable so tests never shell out to `ags-net`.
+/// Bring the private network up. Injectable so tests never shell out to `slotlink.sh`.
 type RadioUp = Box<dyn FnMut(LinkRole) -> std::io::Result<()> + Send>;
 /// Take it back down. Infallible, like the real one: a teardown that can fail is a teardown
 /// callers skip.
@@ -224,7 +224,7 @@ impl LinkStarter {
             let _ = tx.send(LinkProgress::At(LinkStep::Radio));
             if let Err(e) = radio_up(role) {
                 eprintln!("slot: link: {role:?} could not bring the radio up: {e}");
-                // `up` failing is no promise that nothing came up: `ags-net link` can get an
+                // `up` failing is no promise that nothing came up: `slotlink.sh link` can get an
                 // interface as far as configured and still exit non-zero.
                 radio_down();
                 let _ = tx.send(LinkProgress::Failed(LinkFail::Radio));

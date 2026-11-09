@@ -1,5 +1,7 @@
 pub mod app;
 pub mod audio;
+pub mod boot_opening;
+pub mod bootlogo;
 pub mod build_info;
 pub mod core;
 pub mod core_picker;
@@ -12,11 +14,16 @@ pub mod input;
 pub mod link_net;
 pub mod link_radio;
 pub mod link_start;
+pub mod music;
+pub mod mtp;
 pub mod palettes;
 pub mod persist;
 pub mod resample;
 pub mod rewind;
 pub mod root;
 pub mod session;
+// ★ 2026-10-26（六六）：长按 Y 打开的机种选择面板的时钟与状态。与 `core_picker` 并列，
+// 不是一个东西套两个用法 —— 那边是"两个插座"，这边是"一张十格的目录"。
+pub mod sys_picker;
 pub mod thumb;
 pub mod wallpaper;

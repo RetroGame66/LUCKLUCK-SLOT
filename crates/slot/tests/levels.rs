@@ -114,3 +114,34 @@ fn the_mute_survives_a_reboot() {
     assert!(b.muted());
     assert_eq!(b.volume(), 70);
 }
+
+/// ★ 2026-10-07 六六「音量调节键失灵」。
+///
+/// The deck keeps a level of its own — an atomic the **decode thread** reads — and nothing was
+/// pushing it: `adjust` moved `state.volume` (the bar, and what the core is told) and the music
+/// went on playing at whatever it started at. **It only ever looked broken while music was
+/// playing**, which is the one window every other test in this file is looking away from, so
+/// nothing here could have caught it.
+#[test]
+fn the_volume_keys_reach_the_music_deck_too() {
+    let d = tmp_root_with_carts(&["Emerald"]);
+    let mut a = boot(d.path());
+    // The restored level, at boot: the deck's atomic starts at its own default of 80, so a card
+    // that boots at anything else has to be pushed to it before the first track.
+    assert_eq!(
+        a.deck_volume(),
+        60,
+        "the deck booted at its own default rather than the card's level"
+    );
+    assert_eq!(a.deck_volume(), a.output_volume());
+
+    for _ in 0..3 {
+        a.apply(Action::VolumeDown);
+    }
+    assert_eq!(a.deck_volume(), 45, "the deck never heard the press");
+    assert_eq!(a.deck_volume(), a.output_volume());
+
+    // A mute is a level as far as the audio path is concerned, so it has to reach the deck too.
+    a.apply(Action::MuteToggle);
+    assert_eq!(a.deck_volume(), 0, "muted the bar but not the music");
+}

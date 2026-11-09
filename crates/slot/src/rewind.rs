@@ -82,6 +82,15 @@ impl Rewind {
         self.bytes
     }
 
+    /// ★ 2026-10-21：把历史整个丢掉。**「重开本局」要它**：核心复位之后，重开前那些快照
+    /// 描述的是一台已经不存在的机器，留着只会让一次撤销把画面拉回旧进度 —— 玩家会以为
+    /// 重开没生效。代价是那 20 MB 从头攒，和刚插卡时一样。
+    pub fn clear(&mut self) {
+        self.cur = None;
+        self.deltas.clear();
+        self.bytes = 0;
+    }
+
     /// States `pop` can still hand back.
     pub fn depth(&self) -> usize {
         self.deltas.len() + usize::from(self.cur.is_some())
@@ -116,6 +125,9 @@ pub struct RewindThread {
 enum Msg {
     Push(Vec<u8>),
     Pop(std::sync::mpsc::SyncSender<Option<Vec<u8>>>),
+    /// ★ 2026-10-21：丢掉整条历史（见 `Rewind::clear`）。没有回执：调用方不关心，等它等于
+    /// 把一帧卡在压缩线程上。
+    Clear,
 }
 
 impl RewindThread {
@@ -147,6 +159,10 @@ impl RewindThread {
                             // rewind, which is not an error worth reporting.
                             let _ = reply.send(out);
                         }
+                        Msg::Clear => {
+                            rewind.clear();
+                            published.store(0, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
                 }
             })
@@ -167,6 +183,12 @@ impl RewindThread {
             return None;
         }
         rx.recv().ok().flatten()
+    }
+
+    /// ★ 2026-10-21：丢掉整条历史 —— 「重开本局」用，见 `Rewind::clear`。**不等回执**：一次
+    /// 重开不能卡在压缩线程上，而清空只是一次赋值。
+    pub fn clear(&self) {
+        let _ = self.tx.send(Msg::Clear);
     }
 
     /// Last published fill, read without a round trip: the HUD wants it every frame and

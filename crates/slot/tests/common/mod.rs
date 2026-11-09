@@ -55,6 +55,14 @@ fn tmp_root() -> TempDir {
     for sub in slot::root::DIRS {
         std::fs::create_dir(d.path().join(sub)).expect("create content dir");
     }
+    // ★ Battery saves became machine-sorted on 2026-09-28 (`root::saves_dir(root, system)` →
+    // `Saves/<dir_name>`), and nothing creates that subfolder except the first real write.
+    // A test that lays down a save *before* anything has written — which is most of the
+    // eject/resume ones — would otherwise fail on `NotFound` and look like a logic bug
+    // (2026-10-25: seven tests went red exactly this way, only once they could first run).
+    // Every cart these helpers build is a GBA one, so that is the folder to provide.
+    std::fs::create_dir_all(d.path().join("Saves").join("GBA"))
+        .expect("create the GBA save folder");
     d
 }
 
@@ -342,7 +350,7 @@ fn rig_with_led(
         led_writes: led_writes.clone(),
     };
     (
-        Power::new(Box::new(platform), timeout),
+        Power::new(Box::new(platform), Some(timeout)),
         backlight,
         clock,
         charge,
@@ -361,7 +369,7 @@ pub fn session_with_platform(root: &Path) -> (Session, Motor) {
     let mut session = Session::boot(root.to_path_buf());
     session
         .app_mut()
-        .set_power(Power::new(Box::new(platform), Duration::from_secs(300)));
+        .set_power(Power::new(Box::new(platform), Some(Duration::from_secs(300))));
     (session, motor)
 }
 

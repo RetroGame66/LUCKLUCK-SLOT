@@ -9,16 +9,19 @@ fn sample() -> Build {
     }
 }
 
-/// The serial is what the barcode encodes, and Code 39 has no lower case. A hash that fell
-/// outside the alphabet would refuse to encode and the label would draw no bars at all.
+/// The serial is upper case hex.
+///
+/// ★ 2026-10-29（六六）：这条原先还附带一句「它是条形码的载荷，Code 39 会拒绝字母表外的字符」。
+/// 条形码随牌子上的字一起删了，那个约束也就不存在了 —— 上界只剩下"它是个可大写化的短哈希"。
+/// 但**大写这件事本身仍然要求**：`serial()` 是给外面看的名字，大小写不稳定的话，
+/// 同一版构建会有两种写法。
 #[test]
 fn the_serial_is_upper_case_hex() {
     assert_eq!(sample().serial(), "9E11A10");
     assert!(sample().serial().chars().all(|c| c.is_ascii_hexdigit()));
 }
 
-/// The boxed digit beside the bars is the dirty marker, which is the only place a build from
-/// a modified tree owns up to it.
+/// The dirty marker is `1` or `0` and nothing else, which is what the boxed digit used to show.
 #[test]
 fn the_boxed_digit_says_whether_the_tree_was_dirty() {
     let dirty = Build {
@@ -39,11 +42,10 @@ fn a_build_with_no_git_still_has_a_serial() {
         date: "unknown",
         ..sample()
     };
+    // The fallback name is not empty and survives the same upper-casing as a real hash, so a
+    // build that could not read git still names itself instead of reporting nothing.
     assert!(!unknown.serial().is_empty());
-    // And still scans. The alphabet carries the letters and the hyphen, so the fallback name
-    // goes through the same payload as a real hash rather than leaving the panel blank.
-    let payload = format!("*SLOT-{}-{}*", unknown.serial(), unknown.dirty_digit());
-    assert!(slot_ui::code39(&payload).is_some());
+    assert_eq!(unknown.serial(), unknown.serial().to_uppercase());
 }
 
 /// Whatever this build's environment gave it, it is populated rather than empty.

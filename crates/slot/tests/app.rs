@@ -5,6 +5,7 @@ use std::time::Duration;
 use slot::app::{App, Phase, EJECT_S, INSERT_S, SEATED_AT};
 use slot::audio::Sfx;
 use slot::session::Session;
+use slot_gfx::System as ScreenSystem;
 use slot_input::{Action, Btn, RawEvent};
 use slot_store::{write_slot_state, Cart, Core, SlotState};
 use slot_ui::{
@@ -29,11 +30,75 @@ fn app_with_carts(stems: &[&str]) -> App {
                 stem: (*stem).to_string(),
                 rom: format!("Games/{stem}.gba").into(),
                 label: None,
+                art: None,
                 code: String::new(),
+                cgb: 0,
                 title: stem.to_uppercase(),
             })
             .collect(),
     )
+}
+
+/// A lone cart at an explicit path, so a test can say which machine's folder it is in — the
+/// folder under `Games` is what decides the machine (`slot_store::scan::machine_of_path`).
+fn app_with_rom(rom: &str) -> App {
+    let stem = std::path::Path::new(rom)
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    App::new(vec![Cart {
+        initial: slot_store::initial(&slot_store::clean_label(&stem)),
+        rom: rom.into(),
+        label: None,
+        art: None,
+        code: String::new(),
+        cgb: 0,
+        title: stem.to_uppercase(),
+        stem,
+    }])
+}
+
+/// ★★ 2026-10-24（六六）：「**GBA 画面拉伸、非全屏、挤在屏幕左上**」，同一条报障里还带着
+/// 「SFC 黑屏但菜单正常」「FC 进不去」。前两件的共同根因就是这一格：`screen_system()`
+/// 当时只会说两个答案 —— Game Boy 家，和「**其余都是 Advance**」。
+///
+/// 后果不是「画面有点歪」那么轻：SFC / FC / NeoGeo / 街机的 256×224 帧被当成 240×160 的
+/// Advance 帧，一边被塞进 720×480 的矩形（横向多拉 18%），一边和 `GamePass::set_system`
+/// 每帧写回的 `tex_size` 互相打架 —— `upload` 每帧判尺寸不符、**每帧删一次纹理建一次**，
+/// 于是一帧都留不下，就是那片黑。
+///
+/// 所以这张表要一直在：**每个机种的卡在槽上，屏幕都得按它自己的帧尺寸和整数倍数来画**。
+/// 以后再加机种，漏填这一格会直接红在这里，而不是等到真机上才发现画面不对。
+#[test]
+fn every_machine_draws_its_own_frame_on_the_panel() {
+    // (a cart's path, the machine the panel must answer, the picture rect on 720x480)
+    let cases = [
+        ("Games/GBA/Emerald.gba", ScreenSystem::Gba, 720.0, 480.0),
+        ("Games/GB/Tetris.gb", ScreenSystem::Gb, 480.0, 432.0),
+        ("Games/GBC/Links.gbc", ScreenSystem::Gb, 480.0, 432.0),
+        ("Games/SFC/Mario.sfc", ScreenSystem::Sfc, 512.0, 448.0),
+        ("Games/FC/Ninja.nes", ScreenSystem::Fc, 512.0, 448.0),
+        ("Games/NEOGEO/Mslug.zip", ScreenSystem::Neogeo, 640.0, 448.0),
+        ("Games/ARCADE/Cps1.zip", ScreenSystem::Arcade, 640.0, 480.0),
+        // ★ 2026-10-25：MD 与 PS1 进这张表。MD 是 320×224 —— 和 NeoGeo 同一块板，2× 整数倍
+        //   落在 640×448；PS1 是 **640×480 源、1× 缩放**，所以画面矩形就是 640×480，在 720×480
+        //   的面板上水平居中（左右各留 40，上下顶满）。**它是这张表里唯一一个整数倍为 1 的
+        //   机种**，也正是最容易被「其余都是 Advance」那条兜底吞掉、被当成 240×160 拉伸的那一个：
+        //   一旦落进兜底，帧尺寸和 `GamePass::set_system` 每帧写回的 `tex_size` 会互相打架，
+        //   结果是黑屏而不是"画面有点歪"。
+        ("Games/MD/Sonic.md", ScreenSystem::Md, 640.0, 448.0),
+        ("Games/PS1/Ridge.cue", ScreenSystem::Ps1, 640.0, 480.0),
+        // ★ 2026-10-25：PCE 是 256×224，与 SFC/FC 同一块板，2× 落在 512×448。
+        //   它的扩展名 `.pce` 是自己的，所以这条即使不走机种文件夹也分得出来。
+        ("Games/PCE/Blazing.pce", ScreenSystem::Pce, 512.0, 448.0),
+    ];
+    for (rom, want, w, h) in cases {
+        let a = app_with_rom(rom);
+        assert_eq!(a.screen_system(), want, "{rom} is not drawn as itself");
+        let (_, _, got_w, got_h) = a.screen_system().screen_base();
+        assert_eq!((got_w, got_h), (w, h), "{rom} does not fill its own rect");
+    }
 }
 
 /// By colour. Sizing the detector to the bands meant that reshaping the slot made it match
@@ -333,11 +398,17 @@ fn a_cart_in_flight_is_not_also_left_standing_on_the_shelf() {
         .filter(|d| match **d {
             // Any cart, at whatever size the travel has it: the row draws its selection larger
             // than the rest and the seating walks that back down to the cart's own size.
-            Draw::Rect { w, h, .. } | Draw::Tex { w, h, .. } | Draw::Turned { w, h, .. } => {
+            Draw::Rect { w, h, .. }
+            | Draw::Tex { w, h, .. }
+            | Draw::Turned { w, h, .. }
+            | Draw::Yaw { w, h, .. } => {
                 w >= CART_W as f32 - 0.01
                     && w <= CART_W as f32 * CENTER_SCALE + 0.01
                     && (w / h - CART_W as f32 / CART_H as f32).abs() < 0.01
             }
+            // The card's marks are drawn *over* a cart — at the sticker's rect or the cart's
+            // own — and neither is the cart. Counting them here would count it twice.
+            Draw::Glyph { .. } | Draw::Foil { .. } => false,
             Draw::Game | Draw::Glow | Draw::Shot { .. } => false,
         })
         .count();
@@ -361,16 +432,28 @@ fn the_shelf_shows_the_empty_slot() {
     );
 }
 
+/// ★★ 2026-10-24：**卡座不再是 `SlotChrome` 画的程序化底条**。插卡位是货架框桌面图自己
+/// 挖出来的洞（`desktop::desktop_rgba`），由 `App::draw` 的 `push_desktop` 盖在卡带之上 ——
+/// 所以在测试里（没有桌面图纹理时）能验的就只剩"卡带确实被画出来了，而且是它自己的尺寸"。
+/// 桌面图那一层由 `the_shelf_draws_the_frame_over_the_cart` 在真机/渲染里看。
 #[test]
-fn inserting_still_has_a_mouth_to_go_into() {
+fn inserting_draws_the_cart_the_slot_is_taking() {
     let mut a = app_with_carts(&["Emerald"]);
     a.apply(Action::Insert);
     a.update(1.0 / 60.0);
     let mut out = Vec::new();
     a.draw(&mut out);
+    // The Advance cart at the shelf's own middle scale: 240x135 at 1.5x.
+    let wide = |d: &Draw| match *d {
+        Draw::Rect { w, h, .. } | Draw::Tex { w, h, .. } => {
+            (w - CART_W as f32 * CENTER_SCALE).abs() < 1.0
+                && (h - CART_H as f32 * CENTER_SCALE).abs() < 1.0
+        }
+        _ => false,
+    };
     assert!(
-        out.iter().any(is_mouth),
-        "the cart has nothing to slide into"
+        out.iter().any(wide),
+        "the cart going into the slot was not drawn"
     );
 }
 
@@ -483,18 +566,18 @@ fn about_opens_from_the_shelf_and_nowhere_else() {
         "not on the shelf: {:?}",
         s.app().phase()
     );
-    s.app_mut().apply(slot_input::Action::OpenAbout);
+    s.app_mut().apply(slot_input::Action::OpenMenu);
     // `About` carries the card's scroll, so the pattern names it and ignores it: what this
     // asks is which phase is up, not where the list is scrolled to.
-    assert!(matches!(s.app().phase(), slot::app::Phase::About { .. }));
+    assert!(matches!(s.app().phase(), slot::app::Phase::Menu { .. }));
 
     // And a seated cart has no about screen at all.
     s.app_mut()
         .apply(slot_input::Action::GbaDown(slot_input::Btn::B));
     s.app_mut().apply(slot_input::Action::Insert);
-    s.app_mut().apply(slot_input::Action::OpenAbout);
+    s.app_mut().apply(slot_input::Action::OpenMenu);
     assert!(
-        !matches!(s.app().phase(), slot::app::Phase::About { .. }),
+        !matches!(s.app().phase(), slot::app::Phase::Menu { .. }),
         "a label opened over a seated cart"
     );
 }
@@ -506,11 +589,11 @@ fn both_b_and_menu_close_the_about_screen() {
     let d = common::tmp_root_with_carts(&["Emerald", "Fusion"]);
     for out in [
         slot_input::Action::GbaDown(slot_input::Btn::B),
-        slot_input::Action::OpenAbout,
+        slot_input::Action::OpenMenu,
     ] {
         let (mut s, _motor) = common::session_with_platform(d.path());
-        s.app_mut().apply(slot_input::Action::OpenAbout);
-        assert!(matches!(s.app().phase(), slot::app::Phase::About { .. }));
+        s.app_mut().apply(slot_input::Action::OpenMenu);
+        assert!(matches!(s.app().phase(), slot::app::Phase::Menu { .. }));
         s.app_mut().apply(out);
         assert!(
             matches!(s.app().phase(), slot::app::Phase::Shelf),
