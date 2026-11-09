@@ -69,15 +69,16 @@ LUCKLUCK SLOT turns a BaseOS handheld into a shelf of game carts. Beyond upstrea
   own core, frame size and key seating.
 - **A Chinese interface** that takes its typeface off the card.
 - **A shelf indexed across the top of the case** — a hanzi library has no A–Z order, so the index
-  runs left-to-right up top; each cart can carry its own cheats, button remap and screen look, so
-  the tuning lives with the cart, not the frontend.
+  runs left-to-right up top. Cheats are per cart (`System/Cheats/<stem>.cht`); the button map
+  (`System/remap.txt`) and each machine's screen look (`System/display.txt`) belong to the card.
 - **Light and dark case themes**, switchable on the shelf with a key chord, and seven interface
   palettes under that.
 - **Per-machine screen tools upstream never had** — selectable panel masks / aperture presets, a
   colour-correction stage, scanlines for the consoles, and per-machine screen looks — all
   adjustable on the device, no rebuild.
-- **A music player** (像素随身听) that grew into a deck: two faces (one of them a four-shade LCD),
-  45 palettes, lyrics, an equaliser, and a tape row that lives on the same shelf as the carts.
+- **A music player** (像素随身听) that grew into a deck: two faces on a four-shade LCD panel, 40
+  colour ramps, scrolling lyrics and a ten-band equaliser, reached from the menu and returning to
+  its own disc shelf.
 - **Saves in numbered slots**, plus a save-state browser that reaches every cart, and cheats that
   live with the cart rather than in one global file.
 - **A boot opening** between your own boot picture and the shelf's first frame.
@@ -239,10 +240,15 @@ opens.
 
 ## The music player（像素随身听）
 
-Main menu → 像素随身听, or the tape row on the shelf. Three mutually exclusive views: cover + lyrics
-/ dual VU meters / cassette reel, the last with a playback-info overlay. Two faces to draw on — the
-built-in deck and a four-shade retro LCD panel blown up by a whole number — and 45 palettes rotating
-through all of it. Keys are in the table above.
+Main menu → 像素随身听. A disc plays on a deck: the disc behind its window, the name of what is
+playing in the shelf's top band, and the transport keys on the slot band, which is where a deck's
+transport belongs. The deck draws itself in a four-shade retro LCD panel, blown up by a whole
+number so the grid stays square.
+
+**Two faces, and the second one needs the first.** The resting face is the track's name with a
+spectrum; the other is the same track's scrolling lyrics. A card whose music carries no `.lrc` has
+no second face to show — the key still works, it just shows the first one again. A short `MENU`
+opens the disc-info page (tags, track count, length). Keys are in the table above.
 
 What it reads: `Music/` holds albums as folders, `Music/Covers/` the sleeves, `Music/Lyrics/` the
 `.lrc` sidecars, `Music/Fonts/` the panel's CJK typeface. The decoder is chosen by container rather
@@ -257,45 +263,58 @@ Drop PNGs into `Wallpapers/`; one is picked at random each boot and drawn behind
 ## What goes on the card
 
 ```
-BIOS/           optional gba_bios.bin (or the core's own high-level BIOS).
-Games/<sys>/    ROMs, one subfolder per system (GBA/GB/GBC/SFC/FC/NEOGEO/ARCADE/MD/PS1/PCE).
-Labels/<sys>/   <stem>.png — the picture pasted into that cart's recess.
-Saves/          .sav / .srm battery saves.
-States/         <sys>/<stem>/, save-state slots per cart.
-System/         the binary, cores, and the optional settings below.
-Wallpapers/     .png, one at random each boot, behind the shelf.
-Bootlogos/      boot pictures; switch in Settings → 开机画面.
-Cartridge/<sys>/ whole-cart art <stem>.png; missing falls back to System/Carts/66SLOT_CART_<sys>.png.
-Music/Fonts/    the panel's CJK typeface.
-Music/Covers/   album art.
-Music/Lyrics/   lyrics (.lrc).
+BIOS/              optional gba_bios.bin (or the core's own high-level BIOS).
+Games/<machine>/   ROMs, one subfolder per machine (GBA/GB/GBC/SFC/FC/NEOGEO/ARCADE/MD/PS1/PCE).
+Labels/<machine>/  <stem>.png — the picture pasted into that cart's recess.
+Saves/<machine>/   <stem>.sav / .srm battery saves. A flat Saves/<stem>.sav is still read.
+States/<core>/     <stem>/, save-state slots per cart, filed under the core that made them —
+                   mgba / gpsp / fceumm / supafaust / genesis_plus_gx / pcsx_rearmed / pce_fast / fbneo.
+System/            the binary, cores, and the optional settings below.
+Wallpapers/        .png, one at random each boot, behind the shelf.
+Bootlogos/         boot pictures; switch in Settings → 开机画面.
+Cartridge/<machine>/  whole-cart art <stem>.png; missing falls back to System/Carts/66SLOT_CART_<machine>.png.
+Music/Fonts/       the interface typeface — and the deck panel's own face.
+Music/Covers/      album art.
+Music/Lyrics/      lyrics (.lrc).
 ```
 
 Everything in `System/` beyond the binary and cores is optional:
 
 ```
 theme.txt          housing / recess / opening / edge — the shell colours.
-selected_core.ini  <stem> = <core>; defaults to mGBA; both cores ship in System/.
-fonts/             the interface typeface (first file by name; or System/font.ttf).
+selected_core.ini  <stem> = <core>; defaults to mGBA; both GBA cores ship in System/.
 labels.txt         strip_tags on/off — keep or drop [中]/[日]/[英] edition tags.
 display.txt        "mask cc_gba cc_gb cc_gbc" — the per-machine screen look.
 audio.txt          stable / balanced / strict — the audio-latency profile.
 mask.txt / cc.txt  card-supplied panel mask / colour-correction matrix.
 remap.txt          physical button remapping, one "<physical> = <game>" per line.
-Cheats/<stem>.txt  one cheat per line; # starts a comment; multi-line codes joined with +.
+Cheats/<stem>.cht  the cheat file, in the RetroArch `.cht` format (cheatN_enable decides whether
+                   an entry starts on; `#` starts a comment).
+wifi.conf          the card's own Wi-Fi credentials, written by Settings → 无线网络.
 slot.state         light/dark, plus other booleans — written by the frontend.
 overlay.txt / shelf.txt  last overlay per Game Boy / last machine's shelf.
+bootlogo.txt       which picture in Bootlogos/ is the current one.
+bootlogo-original.bmp  the boot picture saved before the first partition write, so a bad flash
+                   is recoverable from the card.
+library.cache      the rom scan's cache, keyed on folder mtimes. Deleting it forces a full rescan.
 Carts/carts.tsv    per-machine shell colours and cart flags; the built-in table is the fallback.
-Carts/66SLOT_CART_<sys>.png  the built-in cart art for a machine.
+Carts/66SLOT_CART_<machine>.png  the built-in cart art for a machine.
 boot_opening.slotvid  the animation between the boot picture and the shelf.
 mtp-responder + mtp-auto.sh  what makes the card appear as a device in a file manager.
 ```
+
+**There is no `System/fonts/`.** The interface typeface is read from the card root —
+`Music/Fonts/` — because that is where the release package puts it; see `Music/Fonts/` above.
 
 > **Two places take cart art, and they are not alternatives.** `Cartridge/<sys>/<stem>.png` is the
 > **whole cart**; `Labels/<sys>/<stem>.png` is the **paper in its recess** — pasted cover-fit (not
 > squashed), and left a flat colour when the file is absent. `Labels/` was removed on 2026-10-28 and
 > **put back on 2026-11-03**: the players who used it said dropping it made editing inconvenient.
 > (`labels.txt` above is the `strip_tags` switch and is unrelated — still in use.)
+
+**A PS1 disc may bring its own BIOS.** A translated or patched PS1 game often needs a specific
+BIOS, and the convention is to put it next to the rom **under the same name** — `Ridge.cue`
+beside `Ridge.bios`. It is read for that cart only and never shows up as a cart of its own.
 
 `System/theme.txt` example:
 
@@ -342,20 +361,24 @@ hand: `adb push System/slot /mnt/sdcard/System/slot && adb shell chmod 0755
 
 ## The companion toolbox
 
-`slot-companion-toolbox-*-win64.zip` (Windows). **Not** part of the frontend — `slot` doesn't call
-it. It does the card upkeep that would otherwise be an adb session: subset the interface font to the
-characters actually used, pre-scale sticker art, back up / restore `Saves/` and `States/`, set the
-device clock, swap the boot logo. Single self-contained executable; talks to the device over adb.
+`slot-companion-toolbox-*-win64.zip` (Windows). **Not** part of the frontend — the frontend never
+calls it. It does the card upkeep that would otherwise be an adb session: a single self-contained
+executable that talks to the device over adb.
+
+> **The toolbox is being reworked and is not shipped with this release.** The table below describes
+> the build that will go out with it; the 2026-11-09 frontend packages do not include one.
 
 | Button | What it does |
 |---|---|
-| **Subset font** | Cuts the full typeface in `fonts/` down to the characters the card's game names and the interface actually use; pushes to `System/fonts/`. Reboot to apply. |
-| **Restore font** | Pushes the full typeface back. Reboot to apply. |
-| **Set clock** | Writes the PC's UTC time to the device clock; default timezone `Asia/Shanghai`. |
-| **Pre-scale stickers** | Resizes the card's `Cartridge/*.png` to the cartridge face size (cover-fit, centre-cropped) so the shelf stops resampling them every boot. Idempotent. |
-| **Back up saves** | Pulls `Saves/` and `States/<sys>/` to a timestamped PC folder. |
-| **Restore saves** | Pushes a backup back; asks before overwriting. |
-| **Boot logo** | Previews / replaces the card's boot picture (scaled/cropped to 720×480, 24-bit BMP). |
+| **卡带编辑器 / Cart editor** | Per-machine shell colour, cart art, the flag, and the laminate — the same table the frontend reads out of `System/Carts/carts.tsv`. |
+| **管理贴纸 / Stickers** | Import, sync and normalise `Labels/` art to the sticker size the frontend actually draws. |
+| **开机画面 / Boot picture** | Previews and replaces the card's boot picture (scaled/cropped to the screen, 24-bit BMP). |
+| **备份存档 / Back up saves** | Pulls `Saves/` and `States/` to a timestamped folder on the PC. |
+| **还原存档 / Restore saves** | Pushes a backup back; asks before overwriting. |
+| **一键对时 / Set clock** | Writes the PC's time to the board's RTC. |
+| **WiFi 直连 / Wi-Fi** | Provisions `System/wifi.conf` over USB, then pulls and pushes files over the same Wi-Fi the frontend's direct-connect page brings up. |
+| **字体瘦身 / Subset font** | Cuts the interface typeface down to the characters this card's game names and the interface actually use, and pushes it to `Music/Fonts/`. Reboot to apply. |
+| **还原字体 / Restore font** | Pushes the full typeface back. Reboot to apply. |
 
 ## Building
 
