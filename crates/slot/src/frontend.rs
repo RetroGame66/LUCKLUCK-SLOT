@@ -177,11 +177,6 @@ pub struct Frontend {
     /// ★ 2026-10-28（六六）：屏上铺的是**内置默认壁纸**（卡上没有 `Wallpapers/`）。换主题要
     /// 重烘那圈洋红光（色跟着主题走），卡自己的图没有这回事 —— 所以要记住这一位。
     wall_default: bool,
-    /// ★ 2026-10-29（调试）：SFC 反射层"左侧偶尔缺失"追踪。每帧读 `compositor.reflect_diag()`，
-    /// 只在 (drew, skip-reason, blur_w, blur_h) 变化时写 boot.log，避免刷屏。
-    reflect_last: Option<(bool, Option<&'static str>, u32, u32, i32, i32, i32, i32, u32, u32)>,
-    /// 上面那条里累计跳过的帧数，露出"偶尔"的频率（每次 SKIP 行都带上）。
-    reflect_total_skips: u32,
 }
 
 /// The about label, and what it was last built for. The gauge is the only thing on it that
@@ -228,8 +223,7 @@ impl Frontend {
     }
 
     /// ★ 2026-11-07：动画播完后让末帧溶进货架，而不是一帧硬切。
-    /// 由 `device_app` 在主循环的前若干帧驱动 alpha；`None` 时 render 什么都不多做，
-    /// 所以这是开机专属的成本，不进稳态帧。`tex` 的创建与释放都归调用方管。
+    /// 由 `device_app` 在主循环的前若干帧驱动 alpha；`None` 时 render 什么都不多做。
     pub fn set_boot_fade(&mut self, tex: Option<TexId>, alpha: f32) {
         self.boot_fade = tex.map(|t| (t, alpha.clamp(0.0, 1.0)));
     }
@@ -252,8 +246,7 @@ impl Frontend {
         let root = platform.root().to_path_buf();
         let session = Session::boot_with_sink(root, sink, audio);
         let frontend = Self::assemble(now, platform, session);
-        // 界面字体（读盘 + 解析约 1.7 s）同样是不碰 GL 的纯 CPU 活，跟扫卡一起塞进
-        // 后台窗口；主线程的 upload_faces 只剩纹理上传。
+        // 界面字体的读盘 + 解析是不碰 GL 的纯 CPU 活，跟扫卡一起塞进后台窗口。
         frontend.load_font();
         frontend
     }
@@ -306,8 +299,6 @@ impl Frontend {
             desktop_from_card: false,
             desktop_tex: None,
             wall_default: false,
-            reflect_last: None,
-            reflect_total_skips: 0,
             boot_fade: None,
         }
     }
@@ -321,9 +312,7 @@ impl Frontend {
     /// Neither is worth a line on a device with no console and a boot budget to protect.
     fn load_font(&self) {
         // ★ 2026-11-07：设备入口已把字体装填放到后台线程（与开机动画并行）。
-        //   卡上那张 7.8 MB 界面字的读盘 + 解析实测 1710 ms，是 upload_faces 里最大的
-        //   一块纯 CPU 活；装好了就别在主线程再读一遍（set_font 的 OnceLock 也会忽略
-        //   第二次，纯属白等）。
+        //   upload_faces 里再走到这里时直接返回，别把同一张多 MB 的字体读第二遍。
         if slot_ui::text::has_user_font() {
             self.session
                 .boot_note("interface font 0 ms (preloaded on boot thread)");
@@ -590,33 +579,10 @@ impl Frontend {
             }
         };
         self.session.app_mut().set_fav_faces(star, off, on);
-        // The three machine logos for the shelf indicator, bottom-left, in `GB, GBC, GBA`
-        // order. Text for now — the user will bake real machine logos — uploaded here with the
-        // rest of the fixed furniture so nothing is rasterised mid-swap.
-        // A card that supplies its own badge is used as it is; a card that does not gets the
-        // built-in word. Either way the face comes with its size, because the app fits it into
-        // the bar's box rather than drawing it at the size it happens to be.
+        // ★ 2026-10-29（六六）：机种 logo 的整块上传已去掉 —— 货架左下角不再画 GB/GBC/GBA
+        //   机种标识（`app.rs::draw_shelf_logo` 连同 `shelf_ind_*` 字段/setter 一并删除）。
+        //   碟片行的 "Disc" 角标不在这里，往下走 `disc_badge` 那段单独上传。
         let carts_dir = self.session.app().root().map(|r| r.join("System/Carts"));
-        let shelf_ind: Vec<(TexId, u32, u32)> = [
-            ("GB", "type_gb.png"),
-            ("GBC", "type_gbc.png"),
-            ("GBA", "type_gba.png"),
-        ]
-        .iter()
-        .map(|(word, file)| {
-            match carts_dir
-                .as_deref()
-                .and_then(|d| slot_ui::decode_rgba(&d.join(file)))
-            {
-                Some((rgba, w, h)) => (compositor.create_texture(w, h, &rgba), w, h),
-                None => {
-                    let f = word_face(word);
-                    (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h)
-                }
-            }
-        })
-        .collect();
-        self.session.app_mut().set_shelf_ind_faces(shelf_ind);
         // ★ 2026-10-22（六六）：卡座背层的机种 logo 高光区。素材 `System/Carts/slot_*.png`
         //   里的**洋红** = 要被前端填成主题发光色的高光区；上传前用
         //   `slot_chrome::fill_logo_highlight` 把洋红换成当前主题的 `bright` 色，换主题时
@@ -828,29 +794,6 @@ impl Frontend {
             Some(disc_badge("type_disc.png")),
             Some(disc_badge("type_disc_light.png")),
         );
-        // The light theme's three, drawn separately by the card rather than tinted from the dark
-        // ones. A card without them falls back to the built-in word as well, so a switch to
-        // light mode on such a card changes nothing but the rest of the palette.
-        let shelf_ind_light: Vec<(TexId, u32, u32)> = [
-            ("GB", "type_gb_light.png"),
-            ("GBC", "type_gbc_light.png"),
-            ("GBA", "type_gba_light.png"),
-        ]
-        .iter()
-        .map(|(word, file)| {
-            match carts_dir
-                .as_deref()
-                .and_then(|d| slot_ui::decode_rgba(&d.join(file)))
-            {
-                Some((rgba, w, h)) => (compositor.create_texture(w, h, &rgba), w, h),
-                None => {
-                    let f = word_face(word);
-                    (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h)
-                }
-            }
-        })
-        .collect();
-        self.session.app_mut().set_shelf_ind_light(shelf_ind_light);
         // Its own upload rather than one of the HUD's: it is drawn on a cart, at its own
         // size, and in a warning colour the level glyphs have no business borrowing.
         let alert = icon_face(Icon::Alert, ALERT_PX, ALERT_INK);
@@ -1953,8 +1896,7 @@ impl Frontend {
         self.session.app().draw(&mut self.draws);
         compositor.draw_list(&self.draws);
         // 收尾淡出：货架已经完整画好，最后再盖一层渐隐的动画末帧。
-        // 放在 draw_list 之后、end_frame 之前，这样两层都在同一个 offscreen FBO 里合成，
-        // blit 一次出屏 —— 不额外多一次 swap，也不额外占开机时间。
+        // 放在 draw_list 之后、end_frame 之前，两层都在同一个 offscreen FBO 里合成。
         if let Some((tex, alpha)) = self.boot_fade {
             if alpha > 0.0 {
                 compositor.draw_list(&[Draw::Tex {
@@ -1967,67 +1909,9 @@ impl Frontend {
                 }]);
             }
         }
-        // ★ 调试（2026-10-29）：SFC 反射层"左侧偶尔缺失"。每帧读合成器的反射诊断，仅 SFC、
-        // 且仅状态变化时落笔到 boot.log（见 `log_reflection_diag`）。玩家跑一遍回传即可定位
-        // 是整帧跳过（mask 未就绪/窗过小）还是窗/模糊尺寸跳变。临时诊断，定位后删除。
-        self.log_reflection_diag(compositor);
         compositor.end_frame(window);
         // 到这里（`end_frame` 已把 offscreen 目标 blit 出去）才允许缓冲回到空闲池。
         drop(frame);
-    }
-
-    /// 临时调试（2026-10-29）：把 SFC 反射层的每帧状态变化写进 `System/boot.log`。
-    ///
-    /// 只在 `(drew, skip_reason, blur_w, blur_h)` 变化时落笔，避免 60fps 刷屏；每次跳过附带
-    /// 累计跳过计数，露出"偶尔"的频率。非 SFC 完全不写。定位到根因后整段删除（连同 `frame()`
-    /// 里的调用与 `Frontend` 的 `reflect_last`/`reflect_total_skips` 字段）。
-    fn log_reflection_diag(&mut self, compositor: &Compositor) {
-        const ON: bool = true;
-        if !ON {
-            return;
-        }
-        let d = compositor.reflect_diag();
-        if d.sys != slot_gfx::System::Sfc {
-            return;
-        }
-        let key = (
-            d.drew,
-            d.skip,
-            d.blur.0,
-            d.blur.1,
-            d.win.0 as i32,
-            d.win.1 as i32,
-            d.win.2 as i32,
-            d.win.3 as i32,
-            d.src.0,
-            d.src.1,
-        );
-        let changed = self.reflect_last != Some(key);
-        if !d.drew {
-            self.reflect_total_skips += 1;
-        }
-        if changed {
-            if d.drew {
-                self.session.boot_note(&format!(
-                    "SFC reflect OK: win=({:.0},{:.0},{:.0},{:.0}) blur=({},{}), src=({},{}), mask={}",
-                    d.win.0, d.win.1, d.win.2, d.win.3,
-                    d.blur.0, d.blur.1,
-                    d.src.0, d.src.1,
-                    if d.mask_present { "on" } else { "off" }
-                ));
-            } else {
-                self.session.boot_note(&format!(
-                    "SFC reflect SKIP (cumulative {}): reason={:?} win=({:.0},{:.0},{:.0},{:.0}) blur=({},{}), src=({},{}), mask_present={} mask_resolved={}",
-                    self.reflect_total_skips,
-                    d.skip,
-                    d.win.0, d.win.1, d.win.2, d.win.3,
-                    d.blur.0, d.blur.1,
-                    d.src.0, d.src.1,
-                    d.mask_present, d.mask_resolved
-                ));
-            }
-            self.reflect_last = Some(key);
-        }
     }
 
     /// The face for row element `i`, from whichever pipeline the row belongs to.

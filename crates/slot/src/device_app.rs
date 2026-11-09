@@ -36,10 +36,6 @@ pub fn run() {
     let root = std::env::var_os("SLOT_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(CARD));
-    // MTP：卡上自带的小助手（System/mtp-auto.sh + System/mtp-responder）把 USB gadget 组好，
-    // 让 PC 把卡当成 MTP 设备（不用拔卡拷文件）。detached + best-effort：脚本/responder 缺失
-    // 只记日志、不致命，也绝不碰前端主循环。2026-11-02 从朋友那份源码合并。
-    slot::mtp::start(&root);
     // This boot's startup log, clean. `boot.log` is only written once the frontend exists, so
     // a failure before that would otherwise say nothing anywhere.
     let _ = std::fs::write(root.join("System/boot.err"), "");

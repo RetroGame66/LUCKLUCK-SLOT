@@ -34,8 +34,13 @@ pub const ROW_H: f32 = 36.0;
 /// moves under a fixed thumb, so this one stays tight.
 pub const GAP: f32 = 4.0;
 pub const PITCH: f32 = ROW_H + GAP;
-/// Where the panel sits. Board 640 wide on a 720 screen ⇒ 40 a side, exactly the game menu's.
-pub const PANEL_X: f32 = 40.0;
+/// Where the panel sits.
+///
+/// ★ 2026-10-21：板 640 宽放在 720 屏上 ⇒ 左右各留 40，与游戏菜单同一块板。
+/// ★★ 2026-10-29（640 树）：本树面板正好 640，**板就是满宽**，所以 `PANEL_X = 0`。
+/// `PANEL_W` 不必改（它本来就叫 640），`ROW_W = 592` 也原样 —— 满宽 640 里留 24 边距，
+/// 与 720 上"板 640 内留 24"是**同一个内边距**，行宽看着一样宽。
+pub const PANEL_X: f32 = 0.0;
 pub const PANEL_Y: f32 = 8.0;
 pub const PANEL_W: f32 = 640.0;
 pub const PANEL_H: f32 = 470.0;

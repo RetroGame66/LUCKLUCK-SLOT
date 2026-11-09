@@ -29,27 +29,32 @@ use crate::plate::UndoFace;
 
 /// The label itself — **the artwork, whole**. Carried in the binary at this face's exact size.
 ///
-/// 660×228 是 720 这块面板的尺度（左右各余 `(720 − 660) / 2 = 30`）。
-/// ⚠️ 另一棵树（`slot-main-640`）是 608×210，那是按 640 面板重算的 —— **两块屏的图不能互换**，
-/// 图尺寸与常量不符时 `sticker_face` 返回 `None`，牌子整块不画，而不是被拉伸。
+/// ★★ 2026-10-29（640 树）：**660×228 → 608×210。** 660 是 720 那块屏的尺度
+/// （左右各余 30），到 640 上 `(640 − 660) / 2 = −10`，两侧各切掉 10 px：圆角和左上
+/// 那个切角都在边上，切掉的正是这块牌子"是块牌子"的地方。
 ///
-/// ⚠️ 图没到之前这里是**透明底**：拿不到这个尺寸就返回 `None`，
+/// 608×210 与 660×228 **等比**（`608/660 = 0.9212`、`210/228 = 0.9211`，两者都落在
+/// ppi 比 `229/247 = 0.927` 上），所以缩完在这台机器上看着**跟原来一样大**
+/// —— 缩的是像素数，不是观感。居中后左右各余 `(640 − 608) / 2 = 16`。
+///
+/// ⚠️ 图没到之前这里是**透明底**：`decode_label` 拿不到这个尺寸就返回 `None`，
 /// 于是牌子整块不画（而不是画一张被拉伸的旧图，也不是画一张空白的黑块）。
-/// 六六重画好的图按 660×228 放进 `assets/` 就自动出现，代码不用再动。
-pub const STICKER_W: u32 = 660;
-pub const STICKER_H: u32 = 228;
+/// 六六重画好的图按 608×210 放进 `assets/` 就自动出现，代码不用再动。
+pub const STICKER_W: u32 = 608;
+pub const STICKER_H: u32 = 210;
 
 /// The label's pixels, at this face's size.
 ///
-/// It never changes for the life of the binary, so a size mismatch is the only failure worth
-/// naming — and it is named as an absent plate rather than a stretched one.
+/// Decoded once and cached: it never changes for the life of the binary, and re-inflating a
+/// 608×210 PNG on the frame loop would be the one costly thing about an otherwise static
+/// picture.
 const STICKER_PNG: &[u8] = include_bytes!("../assets/sticker-66mod.png");
 
 /// The whole label, ready to upload.
 ///
 /// **A size mismatch is `None`, not a resize.** A plate carried at one size and asked for at
 /// another is a plate drawn for a different panel; stretching it would hide that, and hiding it
-/// is how 720 art ended up on the 640 screen with its corners cut off and nothing complaining.
+/// is how the 720 art ended up on a 640 screen with its corners cut off and nothing complaining.
 /// `None` makes the absence visible instead — see `draw_sticker_at`.
 pub fn sticker_face() -> Option<UndoFace> {
     let (px, w, h) = decode_bytes(STICKER_PNG)?;

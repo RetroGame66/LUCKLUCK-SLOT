@@ -93,8 +93,13 @@ const TITLE_MIN_PX: f32 = 12.0;
 /// about height at all. Forty is thirty plus five of air either side, which is what a CJK glyph
 /// at this size needs to keep its top and bottom strokes.
 /// 名称栏（铭牌）自己的几何：360 宽、54 深，挂在屏幕顶边正中。
-pub const PLATE_X0: f32 = 160.0;
-pub const PLATE_X1: f32 = 560.0;
+///
+/// ★★ 2026-10-29（640 树）：**400 宽不变，只换居中位置。**
+/// 400 = 左 40（收藏）/ 中 320（名称）/ 右 40（电量），是六六 2026-10-24 给的切法，
+/// 由内容决定而非屏幕决定；720 上 `(720−400)/2 = 160`，本树 `(640−400)/2 = 120`。
+/// ⚠️ `desktop.rs` 画桌面图时有一份自己的 `NP_X0/NP_X1`（同一块板的两处），改这里必须同步。
+pub const PLATE_X0: f32 = 120.0;
+pub const PLATE_X1: f32 = 520.0;
 pub const PLATE_H: f32 = 54.0;
 /// ★ 2026-10-24（六六）：「顶部名称栏有 360px，名称限定宽度为 300px；收藏符号移至名称栏
 ///   左边 30px 区域，按 24px 居中；电量改成竖放的电池图标，移至名称栏右边 30px 区域，
@@ -228,6 +233,7 @@ pub fn word_face(text: &str) -> UndoFace {
     }
 }
 
+/// The time. Same face and same band as the battery's percent — the two halves of one status row.
 /// ★ 2026-11-03（六六）：「字体有点小」。状态行那档（`word_face`，24px 挤在 20 高的带子里）
 /// 原是给顶栏电池/时钟那个窄仓位定的，Wi-Fi 配置页和直连提示整页挂在它身上就偏小。
 /// 整页的文字另开一档：三十二，带高四十四（正好装下 `ascent - descent` 的整 em 框，
@@ -238,8 +244,8 @@ pub fn word_face(text: &str) -> UndoFace {
 pub const PAGE_PX: f32 = 32.0;
 pub const PAGE_MIN_PX: f32 = 20.0;
 pub const PAGE_H: u32 = 44;
-/// 整页一行的最宽：屏宽七百二减左右各四十的留白。
-pub const PAGE_MAX_W: f32 = 640.0;
+/// 整页一行的最宽：屏宽六百四减左右各四十的留白。
+pub const PAGE_MAX_W: f32 = 560.0;
 
 /// A line of type on a full page rather than in a status slot — the same face, at the size a
 /// page is read at.
@@ -257,7 +263,6 @@ pub fn page_face(text: &str) -> UndoFace {
     }
 }
 
-/// The time. Same face and same band as the battery's percent — the two halves of one status row.
 pub fn clock_width(text: &str) -> u32 {
     band_width_at(text, CLOCK_PX, CLOCK_MIN_PX)
 }

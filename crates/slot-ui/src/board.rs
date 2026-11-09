@@ -198,7 +198,10 @@ const SOCKET_SVG: &str = include_str!("../assets/socket.svg");
 const CHIP_SVG: &str = include_str!("../assets/chip.svg");
 
 /// Where the open cart rests.
-pub const BOARD_X: f32 = 174.0;
+///
+/// ★★ 2026-10-29（640 树）：`BOARD_W = 372` 是贴图自己的尺寸（不缩），所以只是换个居中位置：
+/// 720 上 `(720−372)/2 = 174`，本树 `(640−372)/2 = 134`。纵向不动。
+pub const BOARD_X: f32 = 134.0;
 pub const BOARD_Y: f32 = 150.0;
 
 /// Transparent border on every face that is drawn turned. A turned quad's own edge is not

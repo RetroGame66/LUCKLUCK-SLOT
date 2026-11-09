@@ -28,21 +28,12 @@ pub const PORTS: usize = 4;
 
 /// ★★ 2026-11-09：**超过这个大小的 rom 不读进内存，只把路径交给核心。**
 ///
-/// 起因是玩家反馈「部分 PS1 加载不了」。查到的一条硬事实是：`load()` 一直用 `fs::read`
-/// 把**整个镜像读成一个 `Vec<u8>`**（见 `slot_store::read_rom_named`），而 PS1 的一张盘是
-/// 300–700 MB —— 这台机器只有 **1 GB RAM**（H700 / Mali-G31），前端自己还占着纹理。于是
-/// 大镜像要么 `Vec::with_capacity` 直接 abort，要么把页读进来时被内核 OOM 杀掉：**小盘进得去、
-/// 大盘进不去**，正是"部分"的形状。代价还有一份冤枉的时间：SD 卡上把 700 MB 读一遍（约 20–30 s），
-/// 核心随后又自己把同一个文件读一遍。
+/// 原因与判据见主树同一常量：`load()` 从前用 `fs::read` 把整个镜像读成 `Vec<u8>`，而 PS1
+/// 一张盘 300–700 MB，机器只有 1 GB RAM ⇒ 小盘进得去、大盘要么 abort 要么被 OOM 杀掉，
+/// 表现为玩家说的「部分 PS1 加载不了」。`pcsx_rearmed` 的 `retro_load_game` 只用
+/// `info->path`，`info->data` 从不读，所以这几十万 MB 的 Vec 纯属浪费（还多花一次 SD 全文读取）。
 ///
-/// **为什么可以不读**：`pcsx_rearmed` 的 `retro_load_game` 只碰 `info->path`
-/// （`CheckCdrom()` / `LoadCdromMainExe(NULL)` / `set_cd_image(info->path)`），
-/// `info->data` 一个字节都没读过（源码 `frontend/libretro.c`，本仓库 `licenses/` 有对应 tar）。
-/// RetroArch 对光盘镜像也是只给路径。
-///
-/// **为什么是 48 MiB 这个阈值**：现有核心里有内存镜像需求的，最大的是 GBA（32 MB 封顶）。
-/// 超过 48 MiB 的文件在支持的机种里只剩光盘镜像（`.bin` / `.iso` / `.chd` / `.pbp` 解出来的
-/// `.iso`），而它们全是路径核心。zip 走解包那条路，不看这个阈值。
+/// 阈值 48 MiB：需要内存镜像的核心里最大的是 GBA（32 MB 封顶）；再往上只剩光盘镜像。
 const SLURP_LIMIT: u64 = 48 << 20;
 
 /// A libretro core keeps its emulator in dylib globals, so a second live core would share
@@ -789,7 +780,6 @@ impl RetroCore for LibretroCore {
         // 单测全绿是因为它们直接测 `read_rom` 的语义，没有一处测到这个调用点。
         let zipped = !self.reads_zip_natively && slot_store::is_zip(rom);
         // ★★ 2026-11-09：**光盘镜像不再整盘读进内存**，只交路径。判据与理由见 `SLURP_LIMIT`。
-        //   不是 zip ⇒ 路径本来就是要交给核心的那份，`self.rom` 留空即为"内容核心自己从盘上读"。
         let file_len = std::fs::metadata(rom).map(|m| m.len()).unwrap_or(0);
         let streamed = !zipped && file_len > SLURP_LIMIT;
         let (bytes, inner) = if streamed {
@@ -831,9 +821,7 @@ impl RetroCore for LibretroCore {
         );
         let info = GameInfo {
             path: self.rom_path.as_ref().map_or(ptr::null(), |p| p.as_ptr()),
-            // 没有内存镜像时必须是 `null`：一个空 `Vec` 的 `as_ptr()` 是个对齐的悬垂指针，
-            // 核心若只看 `size` 不看 `data` 就会拿它当缓冲区。（`size` 同时也给 0 ——
-            // "没有数据"这一对要说一致，别让核心读到一半。）
+            // 空 `Vec` 的 `as_ptr()` 是悬垂指针 ⇒ 没有内存镜像时必须是 `null`，`size` 也归 0。
             data: if self.rom.is_empty() {
                 ptr::null()
             } else {

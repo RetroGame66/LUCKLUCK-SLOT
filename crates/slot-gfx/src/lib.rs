@@ -31,6 +31,6 @@ pub use power::{screen_brightness, screen_rect, screen_rect_in, screen_scale, sc
 pub use surface::{blit_rect, blit_rect_fit, fit_rect, fit_scale, GfxError, Surface, OUT_H, OUT_W};
 pub use system::{
     cell_size, mask_scale, scale_for, System, ARCADE_DRAW_H, ARCADE_DRAW_W, FC_SRC_H, FC_SRC_W,
-    GB_SRC_H, GB_SRC_W, GBA_SRC_H, GBA_SRC_W, MD_SRC_H, MD_SRC_W, NEOGEO_SRC_H, NEOGEO_SRC_W,
-    PCE_SRC_H, PCE_SRC_W, PS1_SRC_H, PS1_SRC_W, SFC_SRC_H, SFC_SRC_W,
+    GBA_DRAW_H, GBA_DRAW_W, GB_SRC_H, GB_SRC_W, GBA_SRC_H, GBA_SRC_W, MD_SRC_H, MD_SRC_W,
+    NEOGEO_SRC_H, NEOGEO_SRC_W, PCE_SRC_H, PCE_SRC_W, PS1_SRC_H, PS1_SRC_W, SFC_SRC_H, SFC_SRC_W,
 };

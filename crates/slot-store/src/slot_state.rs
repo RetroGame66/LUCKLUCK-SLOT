@@ -84,15 +84,15 @@ pub const REWIND_SPEED_CHOICES: [u8; 3] = [2, 4, 8];
 /// gears above the one this build had; it does not change the default behaviour.
 pub const REWIND_SPEED_DEFAULT: u8 = 2;
 
-/// Whether the shelf's bottom-left machine-type badge is printed when nobody has said otherwise.
+/// Whether the shelf's bottom-left badge is printed when nobody has said otherwise.
 ///
-/// **`false`, per 2026-10-23 六六** — the shelf badge (左下角机种 logo) was meant to be removed
-/// in earlier rounds but the compile apparently did not carry it through. Rather than delete the
-/// drawing code (which would orphan `draw_shelf_indicator`/`draw_shelf_logo`/`draw_disc_logo`, the
-/// `shelf_ind_*`/`disc_ind_*` fields, their setters, the upload path and the `SHELF_IND_*` constants
-/// — all of which trip `clippy -D warnings` dead_code), we keep everything and simply default the
-/// badge off. Reversible: a card may still set `shelf_badge=1` to bring it back. A named constant
-/// rather than a literal in `Default` so the tests that spell a whole `SlotState` out can point at it.
+/// Since 2026-10-29 (六六) the **machine** logos (GB / GBC / GBA) are removed from the drawing
+/// code entirely — `app.rs::draw_shelf_logo` and the `shelf_ind_*` fields / setters /
+/// `SHELF_IND_W`/`SHELF_IND_H` constants are gone. What `shelf_badge` still gates is the **disc
+/// row's own "Disc" badge** (`draw_disc_logo`), the one thing left in that corner. `false` keeps
+/// it hidden, matching 2026-10-23 六六's "the corner should be clean". Reversible: a card may
+/// still set `shelf_badge=1`. A named constant rather than a literal in `Default` so the tests
+/// that spell a whole `SlotState` out can point at it.
 pub const SHELF_BADGE_DEFAULT: bool = false;
 
 /// Whether fast forward and rewind keep playing the game's audio when nobody has said otherwise.

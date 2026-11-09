@@ -86,10 +86,15 @@ pub const SLOTS: usize = 3;
 /// How far in from the panel's sides the grid sits.
 ///
 /// ★ **它等于贴纸自己的左边距**（2026-10-06 六六：「行宽度应该对齐上面的关于页贴纸」）。
-///   贴纸是 660 宽、由 `sticker::draw_sticker_at` **居中**画的 ⇒ 左右各让 `(720-660)/2 = 30`。
+///   贴纸由 `sticker::draw_sticker_at` **居中**画的 ⇒ 左右各让 `(OUT_W − STICKER_W) / 2`。
 ///   原先这里是 56：格子比贴纸每边窄 26px，上下两块并排看着就是"没对齐"。
 ///   ⚠️ **改这个数就是改 `BUTTON_W`**（下面那条从它推），两处不会各自跑偏。
-pub const MARGIN: f32 = (OUT_W as f32 - 660.0) / 2.0;
+///
+/// ★★ 2026-10-29（640 树）：**从字面量 660 改成 `sticker::STICKER_W`。**
+///   这里原来写的是 `(OUT_W - 660.0) / 2.0`，在 640 屏上算出来是 **−10**；
+///   而且 660 是第二份真值 —— 贴纸一改尺寸，这里不知道，两边就各算各的。
+///   现在它读的是同一个常量，`sticker` 那一处是唯一的旋钮。
+pub const MARGIN: f32 = (OUT_W as f32 - crate::sticker::STICKER_W as f32) / 2.0;
 /// Between the buttons, both ways.
 pub const GUTTER: f32 = 14.0;
 /// The panel is 720 across, so this is what is left after the two margins and the one gutter.

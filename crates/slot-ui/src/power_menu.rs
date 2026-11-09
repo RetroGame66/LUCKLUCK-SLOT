@@ -137,15 +137,15 @@ fn menu_face_at_ink(label: &str, px: f32, h: u32, pad: u32, ink: [u8; 3]) -> Und
     UndoFace { rgba, w, h }
 }
 
-/// ★ 2026-10-29（六六）：**电源菜单的背景图**，720×480 整屏。
+/// ★★ 2026-10-29（六六）：**电源菜单的背景图**，640×480 整屏（本树是 640×480 面板）。
 ///
 /// 长按电源键的关机/重启菜单不再画在主题底（`slot_chrome::opening`）上，而是这张固定的
 /// 霓虹隧道图。**它不随主题色板、不随暗色亮色模式** —— 图本身就是成品，前端只负责把它
 /// 铺满整屏，不填任何主题色。
 ///
 /// ⚠️ 尺寸契约与 `sticker.rs` 同一条：图不是本面板尺寸就返回 `None`（整块不画，回退主题
-/// 底），而不是拉伸。720 这块面板是 720×480。
-pub const POWER_BG_W: u32 = 720;
+/// 底），而不是拉伸。640 这块面板是 640×480。
+pub const POWER_BG_W: u32 = 640;
 pub const POWER_BG_H: u32 = 480;
 
 const POWER_BG_PNG: &[u8] = include_bytes!("../assets/powerbg-66mod.png");

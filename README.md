@@ -2,6 +2,13 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+> **Branch `66-mods-640` — the 640×480 edition.** The `66-mods` branch is the 720×480 tree
+> (RG SP, RG34XX, RG34XXSP and the rest of the 720 group); this branch is the same frontend laid
+> out for the **640×480** panel (RG35XXSP and the 640 group). The two are not a build flag apart:
+> the row geometry, the plate, the shelf, the bezel aperture, the desktop art and the power menu
+> are laid out per panel, and this tree carries no MTP responder. They are kept as two branches
+> on purpose — do not merge them back into one.
+
 > **This is a modified fork.** It is based on
 > [slot-cfw/slot](https://github.com/slot-cfw/slot) by **Brandon T. Kowalski** (MIT; upstream was
 > `BrandonKowalski/slot` until November 2026 and the old URL still redirects), with changes by

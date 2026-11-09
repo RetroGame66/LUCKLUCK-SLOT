@@ -353,6 +353,10 @@ impl Session {
         // FC paid for that first: its stock map binds `X`/`Y` to the turbo rows (连发 A/B), so
         // a `Y` still held from the shelf's "hold to swap machine" gesture arrived in-game as a
         // stuck turbo that only a second press cleared. No core running ⇒ clear, never apply.
+        //
+        // ★ 2026-11-01 补：这条在 720 树上早就有了，640 树分叉时漏抄 —— 两侧 `session.rs`
+        //   的金手指部分（`take_cheats_dirty` / `push_cheats`）逐字相同，唯独这里差一行守卫，
+        //   是分叉时的遗漏而非 640 特意的改动。补齐后两树该函数完全一致。
         if menu || self.overlaid() || !self.emu.is_some() {
             self.pad.clear();
         } else {

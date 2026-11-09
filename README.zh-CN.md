@@ -2,6 +2,11 @@
 
 [English](README.md) · **简体中文**
 
+> **分支 `66-mods-640` —— 640×480 版。** `66-mods` 是 720×480 那棵树（RG SP、RG34XX、RG34XXSP
+> 与其余 720 组机器）；本分支是同一套前端按 **640×480** 面板排的（RG35XXSP 与 640 组）。
+> 两者不是差一个编译开关：货架排布、面板底板、卡座、遮罩孔径、桌面图、电源菜单全部按分辨率
+> 各排一份，这棵树也不带 MTP responder。**故意保持两条分支，不要合并回一条。**
+
 > **这是上游 `slot` 的修改版（fork），非官方版本。**
 > 原作 © Brandon T. Kowalski，MIT 许可；修改由 [@RetroGame66](https://github.com/RetroGame66)（你的六六）完成。
 > 上游仓库已于 2026-11 从 `BrandonKowalski/slot` 迁至 [slot-cfw/slot](https://github.com/slot-cfw/slot)，旧地址会重定向。

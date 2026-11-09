@@ -3,17 +3,31 @@
 //!
 //! This used to be two constants and a single `SCALE`, because there used to be one machine.
 //! There is still one machine at a time, but there is more than one machine this panel can
-//! hold: the Advance at 240x160 and Game Boy at 160x144 today, and the 256x224 / 320x240
-//! frames of the consoles once those cores land. Every one of them wants the same rule, so
-//! the rule is written once and the machine fills it in — see [`scale_for`].
+//! hold: the Advance at 240x160 and Game Boy at 160x144, the 256x224 / 320x224 frames of the
+//! consoles, and PlayStation's 640x480. Every one of them wants the same rule, so the rule is
+//! written once and the machine fills it in — see [`scale_for`].
 //!
-//! On this panel (720x480) the rule returns three for both machines that ship today, which is
-//! exactly the constant this module used to hardcode: the Advance is 240x160 and 240 lands in
-//! 720 exactly three times *and* 160 in 480 exactly three times, and Game Boy is 160x144 and
-//! 160 lands four times across in the panel but only three times down it, so the height is
-//! what pins it at three. That is why nothing on the panel moves when the constant becomes a
-//! calculation — it is the same three, arrived at differently. See the 2026-10-21 measurement
-//! for the pixel-for-pixel proof (0 differing pixels, 0.0/255 max delta).
+//! # ★★ 2026-10-28：本模块有两份，这一份是 **640×480** 的
+//!
+//! `slot-main`（720×480）和 `slot-main-640`（**本树**）是两棵互不共享 git 历史的独立树。
+//! 这块屏是 H700 家族里机型最多的面板（8 台），4:3 的比例又是一批主机帧的天然归宿：
+//!
+//! | 机种 | 720×480（`slot-main`） | **640×480（本树）** |
+//! |---|---|---|
+//! | GBA 240×160 | 3× = **720×480** 满屏 | **53/20 = 636×424**（87.8%，专条，见 [`GBA_DRAW_W`]） |
+//! | GB/GBC 160×144 | 3× = 480×432 | 3× = **480×432**（同样，不变） |
+//! | FC/SFC/PCE 256×224 | 2× = 512×448 | 2× = **512×448**（同样，不变） |
+//! | MD 320×224 | 2× = 640×448（两侧各留 40） | 2× = **640×448（横向正好填满）** |
+//! | NeoGeo 304×224 | 2× = 608×448 | 2× = **608×448** |
+//! | PS1 640×480 | 1× = 640×480（两侧各留 40） | 1× = **640×480（四边零黑边）** |
+//! | ARCADE | 拉伸到 640×480（两侧各留 40） | 拉伸到 **640×480 满屏** |
+//!
+//! ⇒ **本档相对 720 档，除 GBA 外全都不亏、四个机种反而更满**（MD/NeoGeo/PS1/ARCADE 从
+//! "两侧留黑"变成"填满或几乎填满"）。GBA 从 100% 降到 87.8% 是唯一损失 —— 但 3× 要 720 宽，
+//! 这块屏物理上装不下，87.8% 已经是上限内的最优解。
+//!
+//! ⚠️ 两个掌机在 720 上"都回答三"，在本树上**不再相同**：Game Boy 仍是 3，GBA 是 2。
+//! 所以任何"两个掌机同一个倍率"的旧说法在本树里都不成立，别照抄过来。
 //!
 //! Game Boy is short of the panel in both directions, so it does not fill it: it gets a
 //! 480x432 window centred in the frame. That window is what a bezel goes around.
@@ -114,6 +128,30 @@ pub const NEOGEO_SRC_H: u32 = 224;
 /// 4:3 rectangle rather than integer-scaled.
 pub const ARCADE_DRAW_W: u32 = 640;
 pub const ARCADE_DRAW_H: u32 = 480;
+
+/// ★★ 2026-10-28：**GBA 在本树（640×480）上的画面矩形，636×424。**
+///
+/// 为什么不是整数倍：`scale_for(GBA) = min(640/240, 480/160) = min(2, 3) = 2` 只给
+/// 480×320 —— 宽 66.7%、高 66.7%，四周一大圈黑边，640 面板等于白用。而 3× 要 720×480，
+/// 这块屏根本装不下。
+///
+/// 636×424 是**面板物理上限内能取到的最优有理缩放**：
+///
+/// ```text
+/// 636 / 240 = 53 / 20 = 2.65     424 / 160 = 53 / 20 = 2.65     ← 两轴同一个数，不变形
+///   636 = 240 × 53/20           424 = 160 × 53/20
+///   gcd(53, 20) = 1  ⇒  相位每 20 源像素 / 53 屏像素闭合一次
+///   面积利用率 = 636×424 / (640×480) = 269,664 / 307,200 = 87.8%
+/// ```
+///
+/// 53/20 是**同时满足"两轴等比、且不超出面板"的最大精确解**：比它大的候选（8/3=2.667、
+/// 2.7、11/4=2.75）横向都要 640 以上或纵向要 432 以上。**六六在 640 机器上实测过
+/// 636×424「能整除没有子像素干扰」，这条路是验过的。**
+///
+/// ⚠️ **它必须单列一条，`scale_for` 推不出来。** 53/20 是非整数倍，整数倍推导只能落在
+/// 2 或 3 上，中间那个最优解不在它的值域里。这也是本树与 720 树在几何上分岔的第一处。
+pub const GBA_DRAW_W: u32 = 636;
+pub const GBA_DRAW_H: u32 = 424;
 
 /// ★ 2026-10-25: Mega Drive's frame, **320x224**, which is the same pair NeoGeo uses and for
 /// the same reason — `scale_for` gives 2, so the picture lands at 640x448 and 32px of the panel
@@ -242,11 +280,25 @@ impl System {
     /// so an integer multiple would give a different picture size for every game and jump as
     /// the shelf moves between them. It gets a fixed 640x480 rectangle instead — 4:3, the
     /// shape the original cabinets' monitors were — and the picture is stretched to fill it.
+    ///
+    /// ★★ 2026-10-28：**`Gba` 是本树（640×480）上的第二处特例**，636×424 —— 见
+    /// [`GBA_DRAW_W`]。理由与 Arcade 不同：它的源帧是固定的 240×160，只是这块面板
+    /// 装不下 3×（要 720）、2× 又只用到 66.7%，所以取 53/20 这个最大的等比有理倍率。
+    /// 这两个特例都不走 `scale_for` —— 一个是因为"源帧不定"，一个是因为"最优解非整数"。
     pub fn screen_base(self) -> (f32, f32, f32, f32) {
         if self == System::Arcade {
             let w = ARCADE_DRAW_W as f32;
             let h = ARCADE_DRAW_H as f32;
             return ((OUT_W as f32 - w) / 2.0, (OUT_H as f32 - h) / 2.0, w, h);
+        }
+        if self == System::Gba {
+            let w = GBA_DRAW_W as f32;
+            let h = GBA_DRAW_H as f32;
+            // ★★ 2026-10-29（六六拍板）：GBA 画面钉在 **x=2, y=2（贴顶）**，与
+            //   `Overlay/gba-00.png` 的开孔（`(2,2)`~`(637,425)`）逐像素对齐。**不垂直居中**：
+            //   640×480 面板下缘是插卡槽/UI 区，画面贴顶能给它留空间。x 仍取居中公式
+            //   （`(640−636)/2 = 2`，恰好也是 2）；y 直接给 2，不再 `(480−424)/2 = 28`。
+            return ((OUT_W as f32 - w) / 2.0, 2.0, w, h);
         }
         let s = self.scale() as f32;
         let w = self.src_w() as f32 * s;
@@ -259,12 +311,16 @@ impl System {
 mod tests {
     use super::*;
 
-    /// The whole point of turning the constant into a calculation: on this panel it must still
-    /// answer the three it used to be hardcoded to, for both machines that ship. If this ever
-    /// changes, every pixel of the game layer on RG SP / RG34XX / RG34XXSP changes with it.
+    /// ★ 2026-10-28（本树）：640×480 上两个掌机的整数倍答案**不再相同** —— 这正是这一档
+    /// 与 720 档的第一个实质差别。
+    ///
+    /// * Game Boy 仍是 **3×**（160 装进 640 四次、144 装进 480 三次，取小的那个）。
+    /// * GBA 只能到 **2×**（240 装进 640 两次、160 装进 480 三次 ⇒ 2），3× 需要 720 宽，
+    ///   这块屏装不下。所以本树给 GBA 单列了 636×424 的 53/20 矩形（见 `GBA_DRAW_W`），
+    ///   而 `scale_for` 仍然诚实地回答 2 —— **它回答的是"整数倍能取到几"，不是"最终用几"**。
     #[test]
-    fn the_panel_still_answers_three_for_both_shipping_machines() {
-        assert_eq!(scale_for(GBA_SRC_W, GBA_SRC_H), 3);
+    fn this_panel_answers_three_for_game_boy_and_only_two_for_the_advance() {
+        assert_eq!(scale_for(GBA_SRC_W, GBA_SRC_H), 2);
         assert_eq!(scale_for(GB_SRC_W, GB_SRC_H), 3);
     }
 
@@ -272,7 +328,7 @@ mod tests {
     /// the smaller of the two is what keeps the picture square rather than stretched.
     #[test]
     fn the_short_axis_is_what_pins_the_scale() {
-        // 160 fits four times across 720, but 144 only fits three times down 480.
+        // 160 fits four times across 640, but 144 only fits three times down 480.
         assert_eq!(OUT_W / GB_SRC_W, 4);
         assert_eq!(OUT_H / GB_SRC_H, 3);
         assert_eq!(scale_for(GB_SRC_W, GB_SRC_H), 3);
@@ -285,13 +341,38 @@ mod tests {
         assert_eq!(scale_for(1024, 768), 1);
     }
 
+    /// ★ 2026-10-29（本树）：GBA 走 636×424 专条，**不再**是"帧 × 整数倍"。
+    ///
+    /// 这是本树唯一一个"矩形不是源帧整数倍"的机种（Arcade 是拉伸，另一回事）。
+    /// 640 面板上 2× 只给 480×320（50.0%），636×424 给 87.8% —— 差 1.75 倍面积。
+    #[test]
+    fn the_advance_takes_the_fifty_three_twentieths_rect() {
+        let (gx, gy, gw, gh) = System::Gba.screen_base();
+        assert_eq!((gw, gh), (636.0, 424.0));
+        // ★ 2026-10-29（六六拍板）：GBA 钉在 (2,2) 贴顶，不是垂直居中。x 各 2（居中公式），
+        // y 上 2 下 54 —— 下缘留给插卡槽/UI 区。与 Overlay/gba-00.png 开孔逐像素对齐。
+        assert_eq!((gx, gy), (2.0, 2.0));
+        // 两轴同一个倍率 ⇒ 不变形。这是 53/20 的全部意义。
+        assert_eq!(gw / GBA_SRC_W as f32, gh / GBA_SRC_H as f32);
+        assert_eq!(gw / GBA_SRC_W as f32, 53.0 / 20.0);
+        // 并且它确实是**非整数倍** —— 所以遮罩走锚面板那条路。
+        assert!((gw / GBA_SRC_W as f32 - 2.0).abs() > 0.1);
+        // 面积利用率 87.8%，且严格小于满屏（否则就不需要黑边了）。
+        let use_ratio = gw * gh / (OUT_W as f32 * OUT_H as f32);
+        assert!((use_ratio - 0.878).abs() < 0.001);
+        assert!(use_ratio < 1.0);
+    }
+
     #[test]
     fn each_machines_rect_is_its_own_frame_times_the_scale() {
-        let (gx, gy, gw, gh) = System::Gba.screen_base();
-        assert_eq!((gx, gy), (0.0, 0.0));
-        assert_eq!((gw, gh), (720.0, 480.0));
-        let (_, _, w, h) = System::Gb.screen_base();
-        assert_eq!((w, h), (480.0, 432.0));
+        // ★ 本树的 GBA 是专条，不满足"帧 × 整数倍"，所以这里换成一个**确实**满足的机种
+        // （GB 3× = 480×432）来验同一条公式；GBA 自己的几何在上一个测试里。
+        let (gx, gy, gw, gh) = System::Gb.screen_base();
+        assert_eq!((gx, gy), (80.0, 24.0));
+        assert_eq!((gw, gh), (480.0, 432.0));
+        // 公式本体：矩形 == 帧 × scale。
+        assert_eq!(gw, GB_SRC_W as f32 * System::Gb.scale() as f32);
+        assert_eq!(gh, GB_SRC_H as f32 * System::Gb.scale() as f32);
     }
 
     /// The two consoles land at integer 2x on this panel — that is the whole reason they are
@@ -310,16 +391,14 @@ mod tests {
     /// ★ 2026-10-25: the two machines added with MD and PS1, and the two are deliberately
     /// *different* shapes of answer on this panel:
     ///
-    /// * **Mega Drive is 320x224**, integer 2x, 640x448 on a 720x480 panel, letterboxed 16px
-    ///   top and bottom. *Not* NeoGeo's geometry: FBNeo crops the NeoGeo frame to 304x224 (8px of
-    ///   overscan off each side), so `NEOGEO_SRC_W` is 304 while `MD_SRC_W` stays 320 — two
-    ///   224-line 4:3-ish pictures that simply are not the same width.
-    /// * **PlayStation is the panel's height, not its width** — a 640x480 source scales by 1
-    ///   (`min(720/640, 480/480)` = `min(1, 1)`), so the picture rect is **640x480, centred with
-    ///   40 px of letterbox either side and none top or bottom**. It is the one machine whose
-    ///   integer scale *is* 1 — worth pinning because every other machine here is 2x, so a
-    ///   `scale_for` that ever started returning 0 for "does not fit" would silently push this
-    ///   machine's picture to 0x0 while leaving the rest untouched.
+    /// ★ 2026-10-25 加 MD/PS1；2026-10-28 本树按 640×480 重算。
+    ///
+    /// * **Mega Drive 320x224 → 640x448**，在这块屏上**横向正好填满**（640 = 面板宽度），
+    ///   上下各留 16px。720 档上它是两侧各留 40px，本档反而更满 —— 这是 4:3 面板的红利。
+    /// * **NeoGeo 304x224 → 608x448**（FBNeo 把 320 裁掉每侧 8px 的过扫描），比 MD 窄 32px。
+    /// * **PlayStation 640x480 在 640 面板上是 1:1 满屏**（`min(640/640, 480/480)`），
+    ///   四边零黑边。⚠️ 但 1× 意味着 `cell == 1.0`，格子线宽 `1 - 1/cell` 会算成 0 ——
+    ///   那条 `u_cell > 1.001` 的守门就是为它加的，否则整屏被判定成扫描线全黑。
     #[test]
     fn md_and_ps1_geometry_on_this_panel() {
         assert_eq!((MD_SRC_W, MD_SRC_H), (320, 224));
@@ -327,14 +406,16 @@ mod tests {
         let (_, _, nw, nh) = System::Neogeo.screen_base();
         assert_eq!((nw, nh), (608.0, 448.0));
         assert_eq!(scale_for(MD_SRC_W, MD_SRC_H), 2);
-        let (_, _, mw, mh) = System::Md.screen_base();
+        let (mx, _, mw, mh) = System::Md.screen_base();
         assert_eq!((mw, mh), (640.0, 448.0));
+        // 640 装进 640：横向一点黑边都没有，这是本档独有的。
+        assert_eq!(mx, 0.0);
 
-        // 640 across 720 leaves 80 px to share, and 480 down 480 leaves none: x = 40, y = 0.
+        // 640 across 640 leaves nothing, and 480 down 480 leaves nothing either.
         // The short axis is one, not zero — that is the whole of what makes this machine work.
         assert_eq!(scale_for(PS1_SRC_W, PS1_SRC_H), 1);
         let (px, py, pw, ph) = System::Ps1.screen_base();
-        assert_eq!((px, py), (40.0, 0.0));
+        assert_eq!((px, py), (0.0, 0.0));
         assert_eq!((pw, ph), (640.0, 480.0));
     }
 
@@ -353,13 +434,13 @@ mod tests {
     /// ★ 2026-10-28：遮罩锚法**条件化** —— 整数倍锚源像素（与旧版逐像素相同），
     /// 非整数倍锚面板像素（消拍频）。
     ///
-    /// 这个测试就是零回归的门禁：720 面板上**除 Arcade 外每一条**都必须落在"锚源"
-    /// 那一支，且 `scale` 与旧版 `tex` 逐字相等。
+    /// ★ 2026-10-29（本树）：640×480 上 GBA 从这一支**移出去了** —— 它现在走 636×424
+    /// 的 53/20，属于非整数倍，归 `a_fractional_multiple_anchors_the_mask_to_the_panel`。
+    /// 剩下这些在本面板上仍然全是整数倍，一条没少。
     #[test]
     fn a_whole_multiple_anchors_the_mask_to_source_pixels() {
-        // (机种, 在 720x480 上的画面矩形, 这一帧真实纹理尺寸)
+        // (机种, 这一帧真实纹理尺寸)
         let cases = [
-            (System::Gba, (240, 160)),
             (System::Gb, (160, 144)),
             (System::Sfc, (256, 224)),
             (System::Fc, (256, 224)),
@@ -371,6 +452,11 @@ mod tests {
         ];
         for (system, (tw, th)) in cases {
             let rect = system.screen_base();
+            let c = cell_size(rect, tw, th);
+            assert!(
+                (c.0 - c.0.round()).abs() < 1e-3 && (c.1 - c.1.round()).abs() < 1e-3,
+                "{system:?} at {tw}x{th} must be a whole multiple on this panel, got {c:?}"
+            );
             let g = mask_scale(rect, tw, th);
             assert_eq!(
                 g,
@@ -381,16 +467,20 @@ mod tests {
     }
 
     /// 非整数倍必须改锚面板：`rect/3`，每 3 个屏像素一个周期。
+    ///
+    /// ★ 2026-10-29（本树）：**GBA 现在是这里的第一条**，不再是整数倍那一支。
     #[test]
     fn a_fractional_multiple_anchors_the_mask_to_the_panel() {
-        // GBA 在 640x480 面板上实测的矩形：636x424 = 240x160 × 53/20
-        let rect = (2.0, 28.0, 636.0, 424.0);
-        let g = mask_scale(rect, 240, 160);
+        // 本树的真实几何就是 636x424 = 240x160 × 53/20，取自 `screen_base()` 而不是写字面量，
+        // 这样常量一改测试立刻跟上，而不是两处各记一个数。
+        let rect = System::Gba.screen_base();
+        assert_eq!(rect, (2.0, 28.0, 636.0, 424.0));
+        let g = mask_scale(rect, GBA_SRC_W, GBA_SRC_H);
         assert_eq!(g, (212.0, 424.0 / 3.0));
         // 212 = 636/3 ⇒ 每屏像素推进 3*212/636 = 1.0 格，与源宽 240 无关
         assert_eq!(g.0, 636.0 / 3.0);
 
-        // Arcade 在 720 面板上也是非整数（384x224 拉伸到 640x480），同样锚面板
+        // Arcade 在本面板上仍然是非整数（384x224 拉伸到 640x480 整屏），同样锚面板
         let rect = System::Arcade.screen_base();
         let g = mask_scale(rect, 384, 224);
         assert_eq!(g, (640.0 / 3.0, 480.0 / 3.0));

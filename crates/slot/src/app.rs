@@ -14,7 +14,7 @@ use slot_ui::{
     board_at, board_zoom, draw_backdrop, draw_edge_glow,
     draw_shortcut_row, draw_slot_inside, draw_slot_shell, draw_status, draw_sticker_at,
     draw_top_band, ease, grown, label_colour, label_text, letters,
-    lid_at, lift_of, on_board, size_for, size_for_dir, ClockPicker, Draw, FfState, Hud, HudKind, Icon, Letters,
+    lid_at, lift_of, on_board, size_for_dir, ClockPicker, Draw, FfState, Hud, HudKind, Icon, Letters,
     Millis, Placed, Polaroids, PowerChoice, Refusal, Seat, Shelf, SlotChrome, TexId, Toast,
     BOARD_W, BOARD_X, CART_W, CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, HOP_LIFT,
     MOUTH_H, PLATE_Y, SHADOW_H, SHADOW_W, SHELF_TITLE_H, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W,
@@ -1636,12 +1636,8 @@ pub(crate) struct CheatItem {
 /// Inset of the shelf's star indicator from the corner of the case. Clear of the cart bay,
 /// which owns the true bottom edge of the screen.
 ///
-/// The bottom bar's type badge: what a card's own art is fitted into, and the size the built-in
-/// word is drawn at. The card's art is 150 x 50, so half of it lands in this box exactly.
-const SHELF_IND_W: f32 = 75.0;
-const SHELF_IND_H: f32 = 25.0;
-/// How far in from the panel's left edge the badge sits. Flush was too loud for a mark this
-/// small: it read as a cut-off rather than as a badge.
+/// How far in from the panel's left edge the disc row's badge sits. Flush was too loud for a
+/// mark this small: it read as a cut-off rather than as a badge.
 const SHELF_IND_LEFT: f32 = 20.0;
 /// How tall the bottom-right favourites indicator is drawn. Enlarged on request, to match the
 /// mark a favourite cart wears.
@@ -2334,16 +2330,9 @@ pub struct App {
     /// the bottom-right star reads, and what the letter strip and letter jumps stand down for —
     /// a system shelf is still a library with letters, a favourites shelf is not.
     fav_view: bool,
-    /// The three machine logos drawn in the bottom-left corner, in `GB, GBC, GBA` order, each
-    /// with the size it was rasterised at. The lit one is chosen by `shelf_system`.
-    shelf_ind_faces: Vec<(TexId, u32, u32)>,
     /// The disc row's badge — one face, not three, because a disc is not a machine and the row
     /// has no per-machine variant to show.
     disc_ind_faces: Vec<(TexId, u32, u32)>,
-    /// The same three badges for the light theme, which the card draws separately. Held as its
-    /// own set rather than tinted, because a badge is artwork: the two are chosen between by
-    /// the palette's mode, which can change while the device is on.
-    shelf_ind_light: Vec<(TexId, u32, u32)>,
     disc_ind_light: Vec<(TexId, u32, u32)>,
     /// ★★ 2026-10-24（六六）：「**常驻插卡位的各机种背板**」。插卡位那个洞后面不再只有塑料：
     /// 每个机种一张 380×44 背板（`System/Carts/slot_back_*.png`），常驻在洞里，卡带插进来
@@ -2552,9 +2541,7 @@ impl App {
             overlay_indices: [0; crate::root::OVERLAY_RINGS],
             shelf_system: System::Gba,
             fav_view: false,
-            shelf_ind_faces: Vec::new(),
             disc_ind_faces: Vec::new(),
-            shelf_ind_light: Vec::new(),
             disc_ind_light: Vec::new(),
             slot_back: Vec::new(),
             change_face: None,
@@ -4226,16 +4213,10 @@ impl App {
     }
 
     /// Mirror the transport into the phase's own `playing`, so the two cannot disagree.
-    ///
-    /// ★ 2026-11-02 修：原写 `p || playing`（相位**旧值**与解码线程现状取或）——按下 A
-    ///   暂停后解码线程 `playing` 变 false，但相位里存着的 `p=true` 让 OR 结果仍为 true：
-    ///   屏上走带图标仍显示"在放"，而 `deck_playing()`（读相位）跟着说谎。
-    ///
-    /// 两源取或、**都不带相位旧值**：transport 是用户按下的意图（`play()` 命令要过一两帧
-    ///   线程才真起跑，且卡座测试用假音频时线程压根不起来，只有它够快）；`deck.playing()`
-    ///   是解码线程的实时状态（换轨 `play_track` 只发 `player.play()` 不改 transport，
-    ///   以及"自然放完"这种 transport 还挂着 Playing 的时刻，靠它兜住）。
     fn sync_phase_playing(&mut self) {
+        // ★ 2026-11-02：修 OR bug。判据 = transport 在放 **或** 解码线程在放（两源取或，
+        //   **不带相位旧值**）。假音频测试线程起不来时只有 transport 够快；换轨/自然放完
+        //   靠 deck.playing 兜住。暂停后相位旧值挂着的 true 会让图标继续显示播放三角。
         let playing = self.transport == slot_ui::lcd::Transport::Playing
             || self.deck.playing();
         if let Phase::Listening { key, disc, .. } = self.phase {
@@ -4312,26 +4293,16 @@ impl App {
                 // one: `show_disc_row` is a no-op with nothing to show, which is the honest
                 // answer rather than a screen with no sleeves on it.
                 //
-                // ★ 2026-11-02（六六：「把反馈改为屏幕震动吧，直观点」）：但**不再静默**——
-                //   没有碟就抖一下屏（`refusal` 由货架的 `shelf_shake` 在下一帧取用）+ 一声
-                //   拒绝音，让「这里没有能放的东西」看得见，而不是按了 A 像什么也没发生。
                 // ★ 2026-11-02（六六：「不能直接在按按钮的时候震动不离开 MENU 页吗？」）：
                 //   没碟就**原地抖一下**（菜单页走 `screen_shake`，见那里），留在菜单——
                 //   按的这颗按钮没成，画面就该停在原地告诉用户，而不是把他退回货架。
                 // ★★ 2026-11-09（玩家反馈「播放器进不去，卡上明明放了音乐」）：**先扫，再判空。**
-                //
-                //   `self.discs` 开机是空的（`App::new` 里 `discs: Vec::new()`），而它只有两条
-                //   填充路径：`build_disc_row`（要 `show_row` 才走到）和 `sync_deck`（要
-                //   `is_listening()` 才走）。2026-11-02 给这里加了 `return` 之后，判空发生在
-                //   **扫描之前** ⇒ 第一次从菜单进来永远是"没碟"，抖一下屏留在菜单；而那条唯一
-                //   能把 `discs` 填上的路（`show_row` → `build_disc_row` 的惰性扫描）就在 `return`
-                //   后面，永远走不到 —— 于是玩家再也进不了播放器，卡上有没有音乐都一样。
-                //   下面那句 `discs_dirty` 的注释正是这个顺序的来历：扫描在 `build_disc_row` 里，
-                //   不在这里。
-                //
-                //   ⚠️ 这里**故意直接写 `self.discs`、不走 `set_discs`**：后者会把 `discs_dirty`
-                //   置 false，而歌词 / 封面那两趟要走 `sync_deck`，进卡座时要再扫一次才对得上。
-                //   与 `build_disc_row` 里那一句保持同一写法。
+                //   详见主树同一处注释 —— `self.discs` 开机是空的，只有 `build_disc_row`
+                //   （要 `show_row`）和 `sync_deck`（要 `is_listening()`）会填；2026-11-02 的
+                //   `return` 让判空跑在扫描前面，于是第一次进菜单永远"没碟"，而那条能填
+                //   `discs` 的路在 `return` 后面 ⇒ 播放器从此打不开。
+                //   ⚠️ 直接写 `self.discs`、不走 `set_discs`：后者会清 `discs_dirty`，而歌词 /
+                //   封面那两趟要等进卡座时 `sync_deck` 再走一遍。与 `build_disc_row` 同写法。
                 if self.discs.is_empty() {
                     if let Some(root) = self.root.clone() {
                         self.discs = slot_media::discs(&root);
@@ -5013,6 +4984,10 @@ impl App {
     fn overlay_choices(slot: usize, ordinary: usize) -> usize {
         if slot == 0 {
             DisplayFilter::GB_MODEL_COUNT + ordinary
+        } else if slot == 9 {
+            // ★ 2026-10-29（640 树）：GBA 走 OVERLAY，但**不需要网格态**。
+            //   槽 9 只有一个 ordinary 条目，不乘 GBC_GRID_STATES。
+            ordinary
         } else {
             ordinary * DisplayFilter::GBC_GRID_STATES
         }
@@ -5029,6 +5004,9 @@ impl App {
         let at = if self.overlay_slot == 0 {
             self.overlay_index
                 .saturating_sub(DisplayFilter::GB_MODEL_COUNT)
+        } else if self.overlay_slot == 9 {
+            // ★ 2026-10-29（640 树）：GBA 槽位没有网格态，索引直接映射到 overlay_list。
+            self.overlay_index
         } else {
             // A Game Boy Color's ring carries each overlay's grid states in a row, so the overlay
             // is one entry in `GBC_GRID_STATES` — see `overlay_choices`.
@@ -5179,12 +5157,6 @@ impl App {
         self.shelf_switch_moving()
     }
 
-    /// The three machine logos for the bottom-left indicator, in `GB, GBC, GBA` order, each
-    /// with the size it was rasterised at. Uploaded by the frontend at boot.
-    pub fn set_shelf_ind_faces(&mut self, faces: Vec<(TexId, u32, u32)>) {
-        self.shelf_ind_faces = faces;
-    }
-
     /// ★ 2026-10-22（六六）：机种 logo 高光区，画在卡座背层。按机种各一张，两边货架
     /// （游戏行 `shelf` / 碟片行 `disc_shelf`）都设 —— 前端上传时用
     /// `fill_logo_highlight` 把洋红填成当前主题的 `bright` 色，换主题时重传。
@@ -5218,11 +5190,6 @@ impl App {
     pub fn set_loading_face(&mut self, face: Option<(TexId, u32, u32)>, glow: Option<(TexId, u32, u32)>) {
         self.loading_face = face;
         self.loading_glow = glow;
-    }
-
-    /// The light theme's own three, used when the palette is in light mode.
-    pub fn set_shelf_ind_light(&mut self, faces: Vec<(TexId, u32, u32)>) {
-        self.shelf_ind_light = faces;
     }
 
     /// Both themes' disc badge. One call because the two are the same picture of the same word
@@ -5450,50 +5417,26 @@ impl App {
         Some(slot_ui::shutter_at(t))
     }
 
-    /// The logo of the machine whose shelf is up, in the bottom-left corner — the mirror of the
-    /// favourites star in the bottom-right. Only ever one logo: it *is* the shelf. While a swap
-    /// runs, the change is a cross-dissolve — the old machine's logo fades out as the new one
-    /// fades in, both in place — so it dissolves rather than cuts. A reading, not a control:
-    /// SELECT+L2 is the control.
+    /// The badge in the bottom-left corner — the mirror of the favourites star in the
+    /// bottom-right. Since 2026-10-29 (六六) this is **only the disc row's own word**: the
+    /// machine logos (GB / GBC / GBA) that used to sit here are gone from the new version, and a
+    /// machine row's corner is now clean. A reading, not a control: the settings switch is the
+    /// control.
     fn draw_shelf_indicator(&self, out: &mut Vec<Draw>) {
         // ★ **2026-10-10：设置屏第一行开关就在这里生效**（六六：「货架页左下角机种标识的开关」）。
+        //   2026-10-29（六六）：机种 logo 已从代码里去掉（`draw_shelf_logo` 整个删除），
+        //   剩下这一条只服务碟片行的 "Disc"。
         //
-        //   判据取的是**整块家具**，不是"只有机种 logo"：游戏行是机种的标记，碟片行/书行是那一行
-        //   自己的词，但它们**是同一个控件、同一个角、同一套几何**（`draw_*_logo` 都从
-        //   `SHELF_IND_LEFT` 起、都以 `MOUTH_H` 居中）。关掉就三行都不画 —— 用户要的是那个角干净，
-        //   不是"把 GBA 换成 Disc 继续占着"。
-        //
-        //   放在最前面（而不是塞进那几个 `if alpha <= 0.0` 里）：交叉溶解那两支也一样要挡住，
-        //   否则切机种时它会自己闪回来一帧。
+        //   放在最前面（而不是塞进 `if alpha <= 0.0` 里）：碟片行切换时它才不会自己闪回一帧。
         if !self.state.shelf_badge {
             return;
         }
         // The top of the bottom band, which is the box the badge is centred in.
         let y = OUT_H as f32 - MOUTH_H;
-        match &self.shelf_switch {
-            Some(sw) => {
-                // 徽标和转场同一根时钟：帘子卷回去的时候它最后被露出来，所以它必须在帘子
-                // 离场时正好换完 —— 不是"大概在同一段时间里"。
-                //
-                // ★ 2026-10-26：**按回卷段算，不再按整条时间轴算。** 满闸现在是"等用户
-                //   指一台"，可能停几秒；按 `t / TOTAL_S` 算的话徽标会在这段里自己溶解到
-                //   一半就停住，卷起时露出的是一半半边。取消时 `to == from`，两边画的是同一
-                //   台，1.0 的量恰好加满，所以"没换"这一路不需要另写。
-                let p = match sw.up {
-                    Some(u) => (u / slot_ui::SHUTTER_UP_S).clamp(0.0, 1.0),
-                    None => 0.0,
-                };
-                // Smoothstep, so the dissolve eases in and out rather than fading linearly.
-                let e = p * p * (3.0 - 2.0 * p);
-                self.draw_shelf_logo(sw.from, 1.0 - e, y, out);
-                self.draw_shelf_logo(sw.to, e, y, out);
-            }
-            // The disc row's badge is its own face, not a machine's: a disc has no machine, and
-            // **falling through to `shelf_system` put "GBA" under a row of music** — which reads
-            // as a bug in the row rather than as the badge being the wrong thing, because the
-            // rest of the screen was right.
-            None if self.row == ShelfRow::Discs => self.draw_disc_logo(1.0, y, out),
-            None => self.draw_shelf_logo(self.shelf_system, 1.0, y, out),
+        // The disc row's badge is its own face, not a machine's: a disc has no machine. The
+        // games shelf now draws nothing here — the corner is clean.
+        if self.row == ShelfRow::Discs {
+            self.draw_disc_logo(1.0, y, out);
         }
     }
 
@@ -5527,62 +5470,6 @@ impl App {
         });
     }
 
-
-    /// One machine logo, bottom-left, at `alpha`. Both halves of a cross-dissolve come through
-    /// here, so they are placed identically and only their opacity differs.
-    fn draw_shelf_logo(&self, system: System, alpha: f32, y: f32, out: &mut Vec<Draw>) {
-        if alpha <= 0.0 {
-            return;
-        }
-        let idx = match system {
-            System::Gb => 0,
-            System::Gbc => 1,
-            System::Gba => 2,
-            // Consoles have no slot logo art yet; the face lookup simply finds nothing and
-            // draws nothing. The arm still has to be named so the match stays exhaustive.
-            System::Sfc => 3,
-            System::Fc => 4,
-            // Arcade rows have no slot logo art yet; the two indices are named so the match
-            // stays exhaustive and the `get` below finds nothing to draw.
-            System::Neogeo => 5,
-            System::Arcade => 6,
-            // ★ 2026-10-25：MD / PS1 这里**故意什么都不画**，与 SFC/FC 同一个理由 ——
-            //   卡上 `slot_md.png` / `slot_ps1.png` 两张机种徽标都还没有。而且徽标是
-            //   画在**卡座**上的，PS1 本来也该有自己的形状（见 `slot_chrome::Seat` 的注释），
-            //   给它硬套一个横版卡座的徽标反而不如空着。素材到手时，这里是"加两行 + 两张图"。
-            System::Md => 7,
-            System::Ps1 => 8,
-            // ★ 2026-10-25：PCE 同样故意空着 —— 卡上没有 `slot_pce.png` 徽标。
-            System::Pce => 9,
-        };
-        let faces = match slot_ui::palette::mode() {
-            slot_ui::Mode::Light => &self.shelf_ind_light,
-            slot_ui::Mode::Dark => &self.shelf_ind_faces,
-        };
-        let Some(&(tex, w, h)) = faces.get(idx) else {
-            return;
-        };
-        if h == 0 {
-            return;
-        }
-        // Centred in the band's height, and a fixed margin in from the panel's left edge. A
-        // card's own badge is contained in the box rather than stretched, so one that arrives a
-        // different shape still sits right; the built-in word is the same width it always was.
-        let cy = y + MOUTH_H / 2.0;
-        let k = (SHELF_IND_W / w as f32).min(SHELF_IND_H / h as f32);
-        let (sw, sh) = (w as f32 * k, h as f32 * k);
-        // Centred on the clock's own centre at the other end of the top band, so the two left-hand
-        // marks stand in one column.
-        let clock_cx = STATUS_READ_MARGIN + self.shelf_clock.w as f32 / 2.0;
-        out.push(Draw::Tex {
-            x: clock_cx - sw / 2.0,
-            y: cy - sh / 2.0,
-            w: sw,
-            h: sh,
-            tex,
-            alpha,
-        });
-    }
 
     /// One face per slot in `letters::SLOTS` order, each with the size it was rasterised at,
     /// uploaded at boot. The sizes come with them because a face cropped to its ink is as wide
@@ -7829,8 +7716,8 @@ impl App {
             Phase::Listening { .. } => {
                 match self.lcd_panel {
                     Some((tex, w, h)) => out.push(Draw::Tex {
-                        x: 0.0,
-                        y: 0.0,
+                                x: 0.0,
+                                y: 0.0,
                         w: OUT_W as f32,
                         h: OUT_H as f32,
                         tex,

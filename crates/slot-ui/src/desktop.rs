@@ -57,9 +57,14 @@ use crate::slot_chrome;
 // 顶边就横出直壁之外，六像素的壁在顶边被切断、收口成两根**尖刺** —— 他连着两轮说的
 // 「尖尖」就是它。**判据是这条：洞的左右边界永远不许超出直壁 `X0` / `X1`。**
 /// 直壁围出来的矩形：上下两角各内收 `SLOT_CORNER_R` 之后，中间剩一条直壁。
-/// （720 宽居中，`X0 + X1 == OUT_W`。）
-const SLOT_X0: f32 = 180.0;
-const SLOT_X1: f32 = 540.0;
+///
+/// ★★ 2026-10-29（640 树）：**洞宽 360 一点没变，只是居中换了个地方。**
+/// 720 上 `(720−360)/2 = 180`；本树 `(640−360)/2 = 140`。
+/// 宽度为什么不能跟着缩：六六给的数是**横版卡带收束成 360 宽**，卡带宽是卡带的属性、
+/// 不是屏幕的属性 —— 所以洞必须还是 360，否则卡带一插就对不上（这条 2026-10-24 定的）。
+/// 面板窄了 80px，代价全部由两侧的塑料承担，洞本身一个像素都不动。
+const SLOT_X0: f32 = 140.0;
+const SLOT_X1: f32 = 500.0;
 const SLOT_Y0: f32 = 430.0;
 const SLOT_Y1: f32 = 474.0;
 
@@ -174,9 +179,12 @@ pub fn desktop_rgba() -> Vec<u8> {
     // with a clean quarter-circle each. A square foot reads as a bar; the round foot is what
     // reads as a nameplate.
     // ★ 2026-10-24（六六）：顶栏（原「名称栏」）**400 宽** = 左 40 信息 / 中 320 名称 / 右 40 信息，
-    //   所以 x160..559；仍是 y0..53（54 深），与插卡位洞同一 x 范围居中。
-    const NP_X0: f32 = 160.0;
-    const NP_X1: f32 = 560.0;
+    //   所以 x160..559；仍是 y0..53（54 深）。
+    // ★★ 2026-10-29（640 树）：宽度 400 是**内容**决定的（40+320+40，六六自己给的切法），
+    //   不是屏幕决定的 —— 所以它也不缩，只在 640 里重新居中：`(640−400)/2 = 120`。
+    //   内部三段的比例原样保留，`plate.rs` 的 `plate_fav_x`/`plate_battery_x` 全部由此派生。
+    const NP_X0: f32 = 120.0;
+    const NP_X1: f32 = 520.0;
     const NP_H: f32 = 54.0;
     // The plate's bottom corners: a clean quarter-circle each — the top two corners stay
     // square where the plate meets the screen edge, only the bottom two are rounded.

@@ -16,25 +16,34 @@ fn integer_scale_is_limited_by_the_tighter_axis() {
     assert_eq!(fit_scale(1440, 1440), 2);
 }
 
+// ★ 2026-10-29（本树）：这一组验的是**宿主窗口**把整屏合成图缩放上屏的矩形，
+//   所以期望值全部跟着画布走。合成图在本树是 640×480（原 720×480），
+//   下面的值都按 `min(win_w/640, win_h/480)` 现算，备注里留着算式。
 #[test]
 fn blit_rect_centres_the_scaled_output_in_the_window() {
-    assert_eq!(fit_rect(1440, 960), (0, 0, 1440, 960));
-    assert_eq!(fit_rect(1500, 1000), (30, 20, 1440, 960));
-    assert_eq!(fit_rect(2160, 960), (360, 0, 1440, 960));
+    // 1440/640 = 2, 960/480 = 2 ⇒ 2× ⇒ 1280×960，x = (1440-1280)/2 = 80
+    assert_eq!(fit_rect(1440, 960), (80, 0, 1280, 960));
+    // 1500/640 = 2, 1000/480 = 2 ⇒ 2× ⇒ x = 110, y = 20
+    assert_eq!(fit_rect(1500, 1000), (110, 20, 1280, 960));
+    // 2160/640 = 3, 960/480 = 2 ⇒ 取小的 2× ⇒ x = (2160-1280)/2 = 440
+    assert_eq!(fit_rect(2160, 960), (440, 0, 1280, 960));
 }
 
 #[test]
 fn blit_rect_overflows_symmetrically_when_the_window_is_too_small() {
-    assert_eq!(fit_rect(700, 400), (-10, -40, 720, 480));
+    // 700/640 = 1, 400/480 = 0 ⇒ 夹到 1× ⇒ 640×480，y 溢出 (400-480)/2 = -40
+    assert_eq!(fit_rect(700, 400), (30, -40, 640, 480));
 }
 
 #[test]
 fn a_panel_smaller_than_the_composite_fits_rather_than_crops() {
     let (x, y, w, h) = blit_rect_fit((640, 480), 0.0);
     assert!(w <= 640 && h <= 480, "{w}x{h} does not fit a 640x480 panel");
+    // ★ 本树的合成图就是 640×480，**恰好 1:1**，所以这里比的是 4:3（原 3:2）。
     assert!(
-        (w as f32 / h as f32 - 1.5).abs() < 0.01,
-        "aspect was not preserved"
+        (w as f32 / h as f32 - 4.0 / 3.0).abs() < 0.01,
+        "aspect was not preserved: {w}x{h} is {}",
+        w as f32 / h as f32
     );
     assert!(x >= 0 && y >= 0);
 }
@@ -47,8 +56,9 @@ fn the_device_panel_takes_the_fit_and_a_desktop_window_does_not() {
 
 #[test]
 fn the_fit_is_centred_and_shakes_with_the_picture() {
+    // 800×480 装 640×480 的合成图：800/640 = 1、480/480 = 1 ⇒ 1×，x = (800-640)/2 = 80
     let (x, y, w, h) = blit_rect_fit((800, 480), 0.0);
-    assert_eq!((x, w), ((800 - w) / 2, 720));
+    assert_eq!((x, w), ((800 - w) / 2, 640));
     assert_eq!((y, h), (0, 480));
     assert!(blit_rect_fit((800, 480), 6.0).0 > x);
 }

@@ -1094,10 +1094,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mtp-responder"
-version = "0.1.0"
-
-[[package]]
 name = "multiversion_no_op"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1757,6 +1753,14 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "render_palettes"
+version = "0.1.0"
+dependencies = [
+ "png 0.17.16",
+ "slot-ui",
+]
 
 [[package]]
 name = "resvg"

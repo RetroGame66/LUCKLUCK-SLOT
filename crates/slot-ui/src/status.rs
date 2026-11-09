@@ -15,7 +15,10 @@ const STATUS_Y: f32 = BAND_Y + (MOUTH_H - STATUS_H as f32) / 2.0;
 /// ★ 2026-10-24（六六）：「时间移至**左下角区域居中**」——
 /// 底条的左段是「左边框到插卡位洞的左沿」这一块（0..`slot_chrome::SLOT_X0`），时钟在
 /// 这块里水平居中，而不是贴着一个固定 x 左对齐。
-const CLOCK_ZONE: (f32, f32) = (0.0, 180.0);
+///
+/// ★★ 2026-10-29（640 树）：右界跟着洞的左沿走：720 上 180，本树 **140**。
+/// 这一段窄了 40px，时钟仍然居中，只是可用的居中空间跟着少了一点。
+const CLOCK_ZONE: (f32, f32) = (0.0, 140.0);
 
 /// The top band's top edge, and the right margin the battery anchors to — the battery reads in
 /// the top-right corner, shrunk to 60% (2026-10-23 六六).

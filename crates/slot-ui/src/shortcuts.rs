@@ -16,15 +16,36 @@ use crate::text;
 /// How wide a row is. The sticker's width, because they are one card: the label at the top and
 /// the list under it are read together, and a list narrower than the label above it looks like
 /// a second thing that failed to line up.
-pub const ROW_W: u32 = 660;
+///
+/// ★ 2026-10-29（640 树）：**从 660 改成 `sticker::STICKER_W`。** 660 是第二份真值，
+/// 贴纸缩到 608 之后它还停在 660，行就比卡片宽 52 px、比屏还宽 20 px。现在跟着贴纸走。
+pub const ROW_W: u32 = crate::sticker::STICKER_W;
 
 /// Where a key's name begins. Left-aligned, so the caps form a clean left edge and the eye
 /// reads down the buttons rather than hunting for where each one starts. The name sits `BOX_PAD_X`
 /// inside its cap, which is what puts the cap's own left edge at `KEY_X - BOX_PAD_X`.
+///
+/// ★ 2026-10-29（640 树）：**`KEY_X` 保持 30 不动。** 试过按贴纸等比缩到 27，结果是
+/// **键帽列反而装不下**：键名与键帽的边长都没跟着缩（`KEY_PX` 24、`MIN_BTN_W` 都是字体
+/// 与可读性的下限，不是随牌子大小走的东西），`KEY_X` 一让，最宽那一行（含光晕）从
+/// 304 涨到 308，直接压进描述列。所以让的是**描述列的起点**，不是键名。
 const KEY_X: u32 = 30;
 /// Where the description begins. Also left-aligned, and the same column for every row, so the
 /// two columns read as two lists rather than as twenty different gaps.
-const DESC_X: u32 = 320;
+///
+/// ★ 2026-10-29（640 树）：**320 → 312，这是硬下限。** 键帽列的宽度不随牌子缩
+/// （`KEY_PX` 24 是字号下限、`MIN_BTN_W` 是可点面积下限），实测**最宽那一行连光晕占
+/// 311**（`the_keycaps_end_where_the_description_starts` 报的），加 1 px 光晕就是 312。
+/// 试过 294/310 两档，两档都让两列重叠 —— 让的不能是键名那一列。
+///
+/// ⚠️ **代价必须说清楚（这不是 640 引入的，但被它放大了）：** 描述列可用宽度
+/// `ROW_W − DESC_X` = **296**，而最宽那条描述（`PS1：倒带/快进用 SELECT+L2+R2`）
+/// 在 24 px 下墨宽约 **342** —— 720 树里就已经是 663 对 660（溢 3 px，看不出来），
+/// 到 640 这棵树变成**溢约 46 px**，`SELECT+L2+R2` 会被裁掉一截。
+/// 描述行**按设计不缩也不换行**（`line()` 给 `fit` 的是 `f32::MAX`），所以它只会被裁。
+/// ⇒ 六六 2026-10-29 定：**本轮只记录、不改**。真要修得动中文文案或改两行行高（`ROW_H`），
+/// 那是另一件事，登记在 `MEMORY-待办.md`。
+const DESC_X: u32 = 312;
 
 /// A row's height, and so the distance between two of them: room for the line's own air and
 /// still twenty-odd rows to the card. Tall enough for a 24px key inside its cap.
@@ -149,21 +170,20 @@ impl Row {
 /// word. A row is a key line and a description that have to fit a fixed column, so the wording is
 /// a layout decision as much as a translation, and the two belong together.
 ///
-/// The descriptions are written to a budget rather than merely translated, and the budget is a
-/// number rather than a feel: the column is `DESC_X`..`ROW_W` — 340 pixels, 290 for a key line —
-/// and `fit` shrinks whatever will not fit. An over-long row is therefore not a failure; it is one
-/// row set smaller than the others, which is worse, because nothing reports it. Chinese says these
-/// in four to six characters and uses half the column; the English below was shortened until it
-/// measured inside it, which is why several read terser than the Chinese they answer.
+/// **The two trees share the wording but not the column.** This one is 608 across
+/// (`sticker::STICKER_W`, see `ROW_W`) with the description starting at 312, so the description
+/// column is 296 px where the 720 tree's is 340 — the same row is ~45 px tighter here. The card was
+/// rewritten to that budget on 2026-11-07 and the Chinese table now measures **301 / 311** on the
+/// key line and **577 / 608** at the widest description, i.e. it fits this tree *better* than the
+/// old one did: sixteen of the old rows ran past the card here (`PS1：倒带/快进用 SELECT+L2+R2`
+/// reached 731, `Direct connect: WiFi to the card` 830).
 ///
-/// Whoever edits either table should measure again, **with the face the card actually carries**:
-/// `python _tools/gen_card.py` measures both tables against Plix-Bold, which is the machine's own
-/// font since 2026-09-24 and is wider than the embedded fallback the crate's test uses. The two
-/// walls are the tight ones, not the card: a key line may reach `DESC_X - HALO_PX` (319) — the
-/// widest is `SELECT + L1 / R1` at **314.5** — and a description's ink may reach `ROW_W` (660) —
-/// the widest is `Rewind/fwd (no PS1)` at **641.3**. Both were over before this pass: the card had
-/// asked for 323.4 on the key line and 838 on a description, and the tail was being clipped.
-/// The row count is the array's own type, so a row added without changing `60` does not compile.
+/// Whoever edits either table should measure again, **with the face the card actually carries and
+/// against the tree it is in**: `CARD_ROW_W=608 CARD_DESC_X=312 python _tools/gen_card.py`
+/// measures this one, `python _tools/gen_card.py` measures the 720 tree's. Plix-Bold is the
+/// machine's own font since 2026-09-24 and is wider than the embedded fallback the crate's test
+/// uses. The row count is the array's own type, so a row added without changing `60` does not
+/// compile.
 ///
 /// ★ 2026-11-07 六六：「MENU页全键位一览已经很久没更新了，自查变动后重新写一下」。逐条对着
 /// 现状核过的、**删掉**的旧行：
@@ -175,7 +195,7 @@ impl Row {
 ///   ④ 三节"三机通用/GBA/GB/GBC" —— 现在是十台机种。主机种的 `SELECT+X` 是扫描线
 ///      （有遮罩素材时换素材），`SELECT+Y` 与 GBA/GBC 一样走 18 档 `GRADES`。
 /// 补上的新行：`L3`/`R3`（2026-11-03，按一下即亮度/蓝光 +1）、摇杆（与十字键同义）、
-/// 货架 `SELECT+R1` 界面配色（2026-10-1x 的 `cycle_look`，7 档）、以及像素随身听整节。
+/// 货架 `SELECT+R1` 界面配色（`cycle_look`，7 档）、以及像素随身听整节。
 #[cfg(not(feature = "lang-en"))]
 pub const ROWS: [Row; 60] = [
     Row::Head("任何界面"),

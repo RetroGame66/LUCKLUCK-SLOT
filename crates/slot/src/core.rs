@@ -556,26 +556,6 @@ pub fn initial_core_options(core: Core) -> Vec<(&'static str, &'static str)> {
         Core::Pcsx => vec![
             ("pcsx_rearmed_alt_flip", "early"),
             ("pcsx_rearmed_memcard1", "libretro"),
-            // ★ 2026-11-06（读取速度优化）：`pcsx_rearmed_cd_readahead` = 提前预读多少个
-            //   **CD 扇区**，用来消掉 CD 读盘 / 串流时的停顿。
-            //
-            //   ⚠️⚠️ **2026-11-09 更正：这个值的单位是扇区，不是 MB。** 当初写这条注释时按
-            //   "MB"理解，于是把 256 想成了 256 MB、把 333000 想成了"整盘 750MB"。实测源码
-            //   （`libpcsxcore/cdrom-async.c`，`licenses/` 有对应 tar）：
-            //     · `cdra_set_buf_count(n)` 只是把 `acdrom.buf_cnt = n` 后重启预读线程；
-            //     · `lbacache_start` 里 `calloc(buf_cnt, sizeof(struct cached_buf))`，
-            //       而 `struct cached_buf` = `lba_wflag`(4) + `buf[CD_FRAMESIZE_RAW=2352]`
-            //       + `buf_sub[SUB_FRAMESIZE=96]` ≈ **2 452 B / 扇区**。
-            //   ⇒ 256 扇区 ≈ **613 KiB**（不是 256 MB）；333000 扇区 ≈ **779 MiB**（这才是
-            //   "整盘进内存"，也正好解释当初记下的 +750MB）。所以这个档位离"压垮机器"很远，
-            //   它只是一块普通的预读缓存；真要更大的缓冲，1024 扇区也才 ~2.4 MB。
-            //
-            //   取值表（来自 `.so` 的选项）：10/11/12/13/14/15/16/32/64/128/256/512/1024，
-            //   外加 333000 = 整张盘进内存（≈780 MiB RAM，1GB 机器不取）。
-            //   这是纯缓冲优化，对游戏逻辑无副作用。与 `cd_turbo`（让模拟光驱极速、但很多游戏
-            //   会崩）是两回事——后者风险过高，不做默认开启，需要时在 `apply_core_options`
-            //   里按需单独开、且只应对确认不崩的游戏。
-            ("pcsx_rearmed_cd_readahead", "256"),
         ],
         // ★ 2026-10-25：pce_fast，第 8 个核心。**只设两项，都是"别动画面"那一类。**
         //

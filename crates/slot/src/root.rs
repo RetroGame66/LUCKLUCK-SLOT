@@ -319,9 +319,11 @@ pub fn overlay_ring(system: System) -> Option<(usize, &'static str)> {
     match system {
         System::Gb => Some((0, "gb")),
         System::Gbc => Some((1, "gbc")),
-        // The Advance has no bezel art: it fills the frame, so there is nothing to draw
-        // around it and nothing to reflect past.
-        System::Gba => None,
+        // ★ 2026-10-29（640 树）：GBA 在 640×480 面板上的画面矩形是 636×424（`GBA_DRAW_W`），
+        //   不是满屏 —— 六六拍板钉在 **x=2,y=2 贴顶**（左右各 2px、上 2px 下 54px 露面板黑底，
+        //   下缘留给插卡槽/UI 区），与 `Overlay/gba-00.png` 开孔逐像素对齐。
+        //   **不带 `x` 尾缀**：636×424 窗口只剩 2px 边距，没有空间开反射层。
+        System::Gba => Some((9, "gba")),
         // ★ 2026-10-25：共享 bezel 只给**拉伸到 640×480 的那两台**——
         //   · `Arcade` = 街机除 NeoGeo（六六之前定的街机拉伸 640×480）；
         //   · `Ps1`（源帧 640×480）。
@@ -341,8 +343,8 @@ pub fn overlay_ring(system: System) -> Option<(usize, &'static str)> {
 
 /// How many overlay rings there are — one per machine that has one. The order is
 /// `overlay_ring`'s, and it only grows.
-/// ★ 2026-10-25 之后：PCE 占第 8 槽（0-based），故数组长 9。
-pub const OVERLAY_RINGS: usize = 9;
+/// ★ 2026-10-29（640 树）：GBA 占第 9 槽（0-based），故数组长 10。
+pub const OVERLAY_RINGS: usize = 10;
 
 /// Which overlay each system is showing, as indices into `overlay_files`. Kept in
 /// `System/overlay.txt` as one integer per ring, in `overlay_ring`'s order. A missing or

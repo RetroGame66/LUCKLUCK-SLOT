@@ -30,7 +30,11 @@ fn every_machine_owns_a_ring_and_the_advance_owns_none() {
     assert_eq!(overlay_ring(System::Md), Some((6, "md")));
     assert_eq!(overlay_ring(System::Ps1), Some((7, "all_4-3")));
     // The Advance fills the frame: no bezel to draw around it and nothing to reflect past.
-    assert_eq!(overlay_ring(System::Gba), None);
+    // ★ 2026-10-29（640 树）：GBA 在 640×480 面板上的画面矩形是 636×424，四周露出面板黑底
+    //   —— 六六给了 640×480 的 GBA 遮罩（`Overlay/gba-00.png`，画窗 x=2,y=2），走 OVERLAY。
+    //   **不带 `x` 尾缀**：边距只有 2px/28px，没有空间开反射层。
+    //   GBA 占第 9 槽（0-based），`OVERLAY_RINGS` 推到 10。
+    assert_eq!(overlay_ring(System::Gba), Some((9, "gba")));
 }
 
 #[test]
@@ -44,14 +48,15 @@ fn the_slots_are_the_ones_the_older_builds_wrote() {
     // ★ 2026-10-25：4 → 8。`OVERLAY_RINGS` 是**数组长度**，不是有素材的机种数 —— GB/GBC/SFC/FC
     //   四格是 10-22 定的，NEOGEO/ARCADE 两格当时没有 ring 却也占着号（`overlay_ring` 对它们返回
     //   `None`，但下标数组照旧按 8 长），MD/PS1 又各占一格。缩到「恰好有素材的个数」就会越界。
-    assert_eq!(OVERLAY_RINGS, 9, "one slot per machine, whether or not the art exists yet");
+    // ★ 2026-10-29（640 树）：GBA 占第 9 槽 ⇒ 数组长 10。
+    assert_eq!(OVERLAY_RINGS, 10, "one slot per machine, whether or not the art exists yet");
 }
 
 #[test]
 fn the_whole_ring_survives_the_file() {
     let d = tmp_root_with_carts(&["Emerald"]);
-    write_overlay_indices(d.path(), [1, 2, 3, 4, 5, 1, 6, 7, 8]);
-    assert_eq!(overlay_indices(d.path()), [1, 2, 3, 4, 5, 1, 6, 7, 8]);
+    write_overlay_indices(d.path(), [1, 2, 3, 4, 5, 1, 6, 7, 8, 0]);
+    assert_eq!(overlay_indices(d.path()), [1, 2, 3, 4, 5, 1, 6, 7, 8, 0]);
 }
 
 #[test]
@@ -62,10 +67,10 @@ fn a_card_from_an_older_build_still_reads() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let file = d.path().join("System/overlay.txt");
     std::fs::write(&file, "3 1").unwrap();
-    assert_eq!(overlay_indices(d.path()), [3, 1, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(overlay_indices(d.path()), [3, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
     // And no file at all is the same answer.
     let _ = std::fs::remove_file(&file);
-    assert_eq!(overlay_indices(d.path()), [0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(overlay_indices(d.path()), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 }
 
 #[test]

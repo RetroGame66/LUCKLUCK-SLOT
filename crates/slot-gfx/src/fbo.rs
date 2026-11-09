@@ -42,54 +42,6 @@ const REFLECT_GAIN: f32 = 0.75;
 /// the same starting point the game pass uses.
 const IDENTITY_COL: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 
-/// One frame's account of the screen reflection, surfaced for debugging (see
-/// `Compositor::reflect_diag`). Filled every time `draw_reflection` runs — whether or not it
-/// actually drew — so a missing reflection can be told apart from a never-reflective overlay:
-/// `drew == false` with `mask_present == true` is a *skip* (the bug to chase), while
-/// `mask_present == false` is the overlay simply not asking for one.
-#[derive(Clone, Copy)]
-pub struct ReflectDiag {
-    /// The machine whose frame the reflection would mirror — the compositor's active system.
-    pub sys: System,
-    /// Whether the reflection quad was actually drawn this frame.
-    pub drew: bool,
-    /// Why it was skipped, when `drew` is false. `None` means it drew.
-    pub skip: Option<&'static str>,
-    /// The window the reflection is positioned in — the machine's pillarboxed rect on the panel
-    /// (e.g. SFC is centred 512×448 with ~104px side bars). A change here mid-session is a
-    /// geometry shift worth seeing.
-    pub win: (f32, f32, f32, f32),
-    /// The blur target's size — the frame's own shape. Rebuilt when the core switches
-    /// resolution (SFC interlace 256×224 ↔ 512×448), so this jumping around is the usual
-    /// "occasionally" trigger.
-    pub blur: (u32, u32),
-    /// The game frame's own size the reflection blurs — `System::src_w/h()` for a fixed
-    /// machine, or whatever the core handed over for SFC/PS1. A change here mid-session is
-    /// the actual resolution switch; `win` jumps with it and the reflection band shifts off
-    /// the fixed overlay, which reads as the left side dropping out.
-    pub src: (u32, u32),
-    /// Whether a reflective overlay was up (`overlay_reflects`).
-    pub mask_present: bool,
-    /// Whether that overlay's texture was actually in the sprite pool when drawn. A not-yet-
-    /// uploaded overlay is the most common "occasionally missing" cause.
-    pub mask_resolved: bool,
-}
-
-impl Default for ReflectDiag {
-    fn default() -> Self {
-        Self {
-            sys: System::Gba,
-            drew: false,
-            skip: None,
-            win: (0.0, 0.0, 0.0, 0.0),
-            blur: (0, 0),
-            src: (0, 0),
-            mask_present: false,
-            mask_resolved: false,
-        }
-    }
-}
-
 pub struct Compositor {
     fbo: gl::types::GLuint,
     tex: gl::types::GLuint,
@@ -141,9 +93,6 @@ pub struct Compositor {
     /// Non-fatal startup notes — today, only why the reflection was left off. A device with no
     /// console has nowhere to print these, so `device_app` writes them to the card.
     warnings: Vec<String>,
-    /// Last frame's reflection state, for debugging. Set every `draw_reflection` call, read by
-    /// `reflect_diag`. See `ReflectDiag`.
-    reflect_diag: ReflectDiag,
 }
 
 impl Compositor {
@@ -285,7 +234,6 @@ impl Compositor {
                 applied_cc_gamma: None,
                 reflect_mask: None,
                 reflect_prog,
-                reflect_diag: ReflectDiag::default(),
                 u_refl_blur,
                 u_refl_win,
                 u_refl_rect,
@@ -491,62 +439,29 @@ impl Compositor {
         &self.warnings
     }
 
-    /// One frame's account of the screen reflection, for debugging. Filled every
-    /// `draw_reflection` call (drawn or skipped); the frontend logs it — gated to SFC and only
-    /// on change — to chase the "reflection left side occasionally missing" report.
-    pub fn reflect_diag(&self) -> ReflectDiag {
-        self.reflect_diag
-    }
-
     /// The screen glow, for a glowing overlay: the game frame blurred, its own edge carried
     /// straight out past the picture's window, faded with distance — and shown only where the
     /// overlay's own alpha leaves a hole. Two cheap draws: a 3×3 average of the frame into a
     /// half-size texture, then one full-panel quad that samples it. Nothing here reads a
     /// previous frame, so it can neither lag nor fall out of step with the picture.
     fn draw_reflection(&mut self) {
-        // ★ Debug (2026-10-29): record every call, drawn or skipped, so the SFC "reflection
-        // left side occasionally missing" report can be told apart from a never-reflective
-        // overlay. Read by `reflect_diag`; the frontend logs it only on change.
-        let sys = self.game.active();
-        let mask_present = self.reflect_mask.is_some();
-        let mut diag = ReflectDiag {
-            sys,
-            drew: false,
-            skip: None,
-            win: (0.0, 0.0, 0.0, 0.0),
-            blur: self.blur_size,
-            src: (0, 0),
-            mask_present,
-            mask_resolved: false,
-        };
         // Built only if the device's GL took the programs and the blur target. A driver that
         // refused any of them leaves the reflection off; see `Compositor::new`.
         if self.reflect_prog == 0 || self.blur_prog == 0 || self.blur_fbo == 0 {
-            diag.skip = Some("no_program_or_blur_target");
-            self.reflect_diag = diag;
             return;
         }
         let Some(mask_id) = self.reflect_mask else {
-            diag.skip = Some("no_reflect_mask");
-            self.reflect_diag = diag;
             return;
         };
         let Some(mask_tex) = self.sprites.source(mask_id) else {
-            diag.skip = Some("mask_texture_not_resolved");
-            self.reflect_diag = diag;
             return;
         };
-        diag.mask_resolved = true;
         let game_tex = self.game.active_texture();
         let (wx, wy, ww, wh) = self.game.source_rect();
         if ww <= 1.0 || wh <= 1.0 {
-            diag.skip = Some("source_rect_too_small");
-            self.reflect_diag = diag;
             return;
         }
-        diag.win = (wx, wy, ww, wh);
         let (sw, sh) = self.game.source_size();
-        diag.src = (sw, sh);
         // The blur target's own size, not the source's: the target is what the blur is
         // rendered into, and it is sized to the machine that is up (see `resize_blur`).
         let (bw, bh) = self.blur_size;
@@ -580,10 +495,6 @@ impl Compositor {
             self.quad.draw();
             gl::Disable(gl::BLEND);
         }
-        // Drew successfully: clear the skip reason and publish the state.
-        diag.drew = true;
-        diag.skip = None;
-        self.reflect_diag = diag;
     }
 
     pub fn draw_game(&mut self) {

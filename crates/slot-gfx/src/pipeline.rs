@@ -302,12 +302,6 @@ impl GamePass {
         self.push_geometry(self.texture_size.0, self.texture_size.1);
     }
 
-    /// The machine whose frame this pass is currently drawing. Read by `draw_reflection` to tag
-    /// its per-frame debug account (`ReflectDiag::sys`).
-    pub fn active(&self) -> System {
-        self.active
-    }
-
     /// The texture `upload` writes into and `draw` puts up, for the machine that is active.
     pub fn active_texture(&self) -> gl::types::GLuint {
         match self.active {
