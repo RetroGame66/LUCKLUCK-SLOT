@@ -61,13 +61,25 @@ void main() {
 }
 "#;
 
-/// `u_src` is the source size in pixels, which is also the number of times the 3x3 mask
-/// tiles across the target: one RGB triad per source pixel, exactly.
+/// `u_src` is the source size in pixels — the picture's *own* grid, which the lattice is drawn
+/// on. `u_cell` is how many *output* pixels one source pixel covers, per axis. `u_mask_scale`
+/// is how many times the 3x3 mask table repeats across the window — **not** the same grid:
+/// see both fields' notes in `pipeline.rs` for why a whole multiple anchors it to source
+/// pixels and a fractional one to the panel's own pixels.
 pub const GAME_FRAG: &str = r#"
 precision mediump float;
 uniform sampler2D u_game;
 uniform sampler2D u_mask;
 uniform vec2 u_src;
+// 每个**源像素**在面板上占多少输出像素（`rect/tex`，两轴各一个）。**不**是缩放常数：
+// 它是几何量，从某一帧的实际纹理尺寸和这一机种的画面矩形除出来，所以 320×240 的 PS1 帧
+// 落在 640×480 的矩形里时这里是 2。格子线宽由它反算（见下面的 `1 - 1/cell`）。
+// 不能复用 `u_rect`：`RECT_VERT` 里有同名的那个，顶点阶段默认 highp、这里 mediump，
+// 同名不同精度会直接链接失败 —— 2026-10-26 的 `REFLECT_FRAG` 就在这上面黑过一次屏。
+uniform vec2 u_cell;
+// 遮罩表的重复次数（表是 3×3，一个重复 = 三格）。整数倍时等于 `u_src`（锚源像素），
+// 非整数倍时等于 `rect/3`（锚面板像素）。两轴可能不同，所以是 vec2。
+uniform vec2 u_mask_scale;
 uniform float u_bright;
 uniform mat3 u_cc;
 // 色彩校正的黑点：在矩阵之后加上去（同一空间）。饱和度/单色背光那一类用不上它（恒 0），
@@ -94,6 +106,13 @@ uniform float u_grid_mix;
 // 1.0 = 只画**下行**（扫描线），0.0 = 画整个 5/9 格子。扫描线是同一格子的横线那一半，
 // 所以不用第二条渲染路径 —— 一个 uniform 分支就够。
 uniform float u_grid_scan;
+// ★ 2026-10-28：**扫描线隔几个源行画一条**，1 = 每行，2 = 隔一行。
+//
+//   这个 uniform 自 2026-10-24 就一直在往这里推（`app::DisplayFilter::CONSOLE_SCANLINE_STEP
+//   = 2`，六六原话「FC/SFC 的扫描线太密了画面基本看不见，能不能减少一半密度？」），
+//   但 shader 一直没声明它 ⇒ `glUniform1f(-1, 2.0)` 是无声无操作，**分散度减半从未生效**，
+//   2× 主机实际一直是每源行一条（占屏 1/2）。2026-10-25 的复盘里记过这一条，这里补上。
+uniform float u_grid_step;
 // 色彩校正所在的 gamma：1.0 = 直接在编码空间乘（旧行为，两步 pow 互为逆）；
 // 2.2 = 先转线性、乘完再转回。饱和度与单色背光映射必须在线性空间里做才不发闷——
 // 这是 RetroArch 手持着色器（nds-color / lcd1x_nds）的通行做法，直接乘编码值会把
@@ -110,6 +129,8 @@ float Bayer4(vec2 a) {
 }
 void main() {
     vec3 c = texture2D(u_game, v_uv).rgb;
+    // 隔行合成（PS1 专用，max 取亮）。`u_field_parity` 现在不再被 shader 读取，
+    // 但 pipeline 仍然推——保留 uniform 位以便未来需要「仅取偶数行」时不用重编。
     if (u_pix_on > 0.5) {
         // 抖动 ±半个 5-bit 步，再吸附到 32 级（floor+0.5 即四舍五入），最后查表。
         float bayer = Bayer4(floor(gl_FragCoord.xy)) - 0.5;
@@ -130,16 +151,51 @@ void main() {
     }
     if (u_grid_mix > 0.0) {
         vec2 sub = fract(v_uv * u_src);
-        // The mesh is the right column and the bottom row of every 3x3 source pixel (5 of its 9,
+        // The mesh is the right column and the bottom row of every source pixel (5 of its 9,
         // overlap counted once); a scanline is the bottom row alone — the same lit wire every
-        // third game pixel, which is what a panel's row gap looks like.
-        bool hit = sub.y >= 0.66667 || (u_grid_scan < 0.5 && sub.x >= 0.66667);
+        // nth game pixel, which is what a panel's row gap looks like.
+        //
+        // ★ 2026-10-28：线宽由 `u_cell` 反算，不再写死 `0.66667`。
+        //
+        //   写死的 `0.66667` 是"一个源格子里最下面那 1/3"。它的**物理含义**是 3× 下的
+        //   一条 1px 输出行（3× 时 1/3 格 = 正好 1 屏像素），但把 1/3 这个**比例**当成了
+        //   常数。换到 2× 时它变成"源格子最下面的 1/3 格"，而一个源格子只有 2 个输出
+        //   像素、中心落在 0.25 / 0.75 —— 于是只有 0.75 那一个被点亮。
+        //
+        //   所以**点亮行数其实没变**（2× 下旧版也是 1 行），变的是"点亮哪一行还说得通"：
+        //   0.75 落在格子靠下的位置，不是格子的**底线**。`1 - 1/cell` 把"1 个输出像素宽"
+        //   这件事直接写进公式，2× 下阈值 0.5 ⇒ 点亮的正是下半行（0.75 ≥ 0.5），3× 下
+        //   `1 - 1/3 = 0.66667`（差 3e-6，远在中心点 0.167/0.5/0.833 的间隙之外）⇒
+        //   **720 档逐像素不变**。逐格枚举见 `_tools/_mask_anchor_sim.py`。
+        //
+        //   ⚠️ 1× 要单独挡：一个源格子只有一个输出像素，`1 - 1/1 = 0` ⇒ `sub >= 0` 恒真
+        //   ⇒ 整屏全黑。1× 下扫描线本来也无处安放（一个源行就是一个屏行），所以不画 ——
+        //   旧版 0.66667 在 1× 下也正好全部不点亮（中心 0.5 < 0.667），这一挡把那个保住。
+        vec2 inv = 1.0 / max(u_cell, vec2(1.0));
+        // 扫描线的**行分散**：源行号 % step。`u_src` 就是源格数，`floor` 取到当前源行。
+        // step=1 时 `mod` 恒 0 ⇒ 每行都画（GB/GBC 的格子走 `u_grid_scan = 0`，不受影响）。
+        // step=2 时只有偶数源行画 ⇒ 间距从 2 屏行变 4 屏行，浓度减半。
+        float row = floor(v_uv.y * u_src.y);
+        bool spread = u_grid_step <= 1.0 || mod(row, u_grid_step) < 0.5;
+        bool hit = false;
+        if (spread && u_cell.y > 1.001) {
+            hit = sub.y >= 1.0 - inv.y;
+        }
+        if (!hit && u_grid_scan < 0.5 && u_cell.x > 1.001) {
+            hit = sub.x >= 1.0 - inv.x;
+        }
         if (hit) {
             c = mix(c, u_grid, u_grid_mix);
         }
     }
     // 面板遮罩照旧在编码空间乘（顺序与旧版等价：矩阵与遮罩都是乘法，可交换）。
-    vec3 rgb = c * texture2D(u_mask, v_uv * u_src).rgb;
+    //
+    // ★★ 2026-10-28：平铺次数改由 `u_mask_scale` 给，不再写 `u_src`。
+    //   整数倍时 `u_mask_scale == u_src`（与旧版**逐字相同**）；非整数倍时是 `rect/3`，
+    //   每 3 个屏像素一个周期，格推进率恒 1、拍频归零。为什么必须条件化见 `system.rs`
+    //   的 `mask_scale`：2× 下一律锚面板会把格子边界从块间挪进块内，720 机器上所有 2×
+    //   主机的画面都会变。
+    vec3 rgb = c * texture2D(u_mask, v_uv * u_mask_scale).rgb;
     FRAG_COLOR = vec4(rgb * u_bright, 1.0);
 }
 "#;
@@ -253,10 +309,102 @@ void main() {
 pub const SPRITE_FRAG: &str = r#"
 precision mediump float;
 uniform sampler2D u_tex;
+uniform sampler2D u_ramp;
 uniform vec4 u_colour;
+uniform vec4 u_uv;
+uniform vec4 u_foil;
 varying vec2 v_uv;
+
+// One value per cell, stable across frames. The constants are kept small on purpose: this
+// shader is mediump, and the well-known hash's 123.34/456.21 multiply runs off the end of a
+// mediump mantissa on its way to infinity.
+float hash21(vec2 p) {
+    p = fract(p * vec2(0.1031, 0.1030));
+    p += dot(p, p + 33.33);
+    return fract(p.x * p.y);
+}
+
 void main() {
-    FRAG_COLOR = texture2D(u_tex, v_uv) * u_colour;
+    // The sub-rect of the texture this quad covers: all of it for a plain sprite, the
+    // sticker's own rectangle for a film, one atlas cell for a glyph.
+    vec2 t = mix(u_uv.xy, u_uv.zw, v_uv);
+    vec4 src = texture2D(u_tex, t);
+    vec4 c = src * u_colour;
+    if (u_foil.x > 0.0) {
+        float luma = dot(src.rgb, vec3(0.299, 0.587, 0.114));
+        // The dark parts of what is under the film eat it and the bright parts barely take
+        // it. This is the difference between a film laid over something and a coloured
+        // rectangle drawn on top of it.
+        float shade = 1.0 - 0.7 * luma;
+        float effect = u_foil.w;
+        vec3 film = vec3(0.0);
+        float cover = 1.0;
+        if (effect < 0.5) {
+            // Holo: the whole sticker, one rainbow crossing it at an angle, held a quarter
+            // back from the ramp's own chroma - diffraction at full saturation over a whole
+            // label reads as candy rather than as foil.
+            float a = t.x * 0.7 + t.y * 0.3 + u_foil.y;
+            vec3 ramp = texture2D(u_ramp, vec2(fract(a), 0.5)).rgb;
+            film = mix(vec3(dot(ramp, vec3(0.299, 0.587, 0.114))), ramp, 0.72);
+        } else if (effect < 1.5) {
+            // Shatter: cracked cells, each its own hue off the ramp and its own twinkle,
+            // some of them lit at a time, the seams between them read as the cracks.
+            vec2 cells = vec2(14.0, 8.0);
+            vec2 f = fract(t * cells);
+            vec2 cell = floor(t * cells);
+            float h = hash21(cell);
+            float tw = 0.5 + 0.5 * sin(u_foil.y * 6.28318 + h * 6.28318);
+            cover = step(0.58, h) * (0.30 + 0.70 * tw);
+            vec2 d = min(f, 1.0 - f);
+            float seam = smoothstep(0.0, 0.05, min(d.x, d.y));
+            cover *= mix(0.35, 1.0, seam);
+            film = texture2D(u_ramp, vec2(h, 0.5)).rgb;
+        } else if (effect < 2.5) {
+            // Metal: brushed streaks running one way with a hard specular crossing them,
+            // and the sticker's own bright passages etched down into the plate.
+            float streak = hash21(vec2(floor(t.x * 120.0), floor(t.y * 2.0)));
+            vec3 silver = mix(vec3(0.30, 0.31, 0.33), vec3(0.90, 0.91, 0.93), streak);
+            float diag = fract(t.x * 0.8 - t.y * 0.6 + u_foil.y * 0.12);
+            float spec = pow(1.0 - abs(diag - 0.5) * 2.0, 6.0);
+            film = silver + vec3(spec) * 0.45;
+            float etch = smoothstep(0.45, 0.85, luma);
+            film = mix(film, film * 0.45, etch * 0.7);
+        } else if (effect < 3.5) {
+            // Glitter: sparse warm points, each with its own slow twinkle.
+            vec2 cells = vec2(26.0, 15.0);
+            vec2 f = fract(t * cells) - 0.5;
+            vec2 cell = floor(t * cells);
+            float h = hash21(cell);
+            float on = step(0.90, h);
+            float tw = 0.5 + 0.5 * sin(u_foil.y * 9.0 + h * 40.0);
+            cover = (1.0 - smoothstep(0.02, 0.20, length(f))) * on * tw;
+            film = vec3(1.0, 0.94, 0.82);
+        } else {
+            // Prism: the shell's own edge and nowhere else. The cart face's alpha *is* its
+            // outline, so the band where the alpha falls off just inside the edge is the
+            // edge itself - no second shape to draw and no outline to trace.
+            vec2 inward = mix(t, vec2(0.5), 0.012);
+            float edge = src.a * (1.0 - texture2D(u_tex, inward).a);
+            cover = edge;
+            vec3 ramp = texture2D(u_ramp, vec2(fract(t.x * 0.6 + t.y * 0.4 + u_foil.y), 0.5)).rgb;
+            film = mix(vec3(dot(ramp, vec3(0.299, 0.587, 0.114))), ramp, 0.8);
+        }
+        // The sweep: one specular band crossing the sticker, and only on the cart under the
+        // caret - a still film on every cart and a moving one where the eye already is.
+        if (u_foil.z > 0.0) {
+            float s = fract(t.x * 0.9 - t.y * 0.25 - u_foil.y * 0.35);
+            float band = pow(max(0.0, 1.0 - abs(s - 0.5) * 2.0), 5.0);
+            film += vec3(1.0) * band * u_foil.z * 0.8;
+            cover = max(cover, band * u_foil.z);
+        }
+        // Light and dye, not a layer: the film hands over only its own coverage, and the
+        // framebuffer's blend lays it over the face that is already drawn. `u_colour.a` is
+        // the quad's own opacity, so a cart dimmed at the side of the row dims its film too.
+        float a = clamp(cover * shade * u_foil.x, 0.0, 1.0) * u_colour.a;
+        FRAG_COLOR = vec4(film, a);
+    } else {
+        FRAG_COLOR = c;
+    }
 }
 "#;
 

@@ -1,6 +1,8 @@
+#[cfg(unix)]
 use std::ffi::{c_int, c_ulong, c_void};
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,6 +24,7 @@ const EV_FF: u16 = 0x15;
 const FF_RUMBLE: u16 = 0x50;
 /// `_IOW('E', 0x80, struct ff_effect)`. The struct is 48 bytes once the union's eight byte
 /// alignment is counted, which is where the size in the middle of this comes from.
+#[cfg(unix)]
 const EVIOCSFF: c_ulong = 0x4030_4580;
 
 /// What `setbl` takes. The class publishes its own range in `max_brightness`; the display
@@ -239,6 +242,7 @@ struct Motor {
     running: bool,
 }
 
+#[cfg(unix)]
 #[repr(C)]
 #[derive(Default)]
 struct FfTrigger {
@@ -246,6 +250,7 @@ struct FfTrigger {
     interval: u16,
 }
 
+#[cfg(unix)]
 #[repr(C)]
 #[derive(Default)]
 struct FfReplay {
@@ -253,6 +258,7 @@ struct FfReplay {
     delay: u16,
 }
 
+#[cfg(unix)]
 #[repr(C)]
 #[derive(Default)]
 struct FfRumble {
@@ -262,6 +268,7 @@ struct FfRumble {
 
 /// `struct ff_effect`. The union after `replay` is eight byte aligned, so it starts at 16 and
 /// the whole thing is 48; `_align` and `_tail` are that padding written down.
+#[cfg(unix)]
 #[repr(C)]
 struct FfEffect {
     kind: u16,
@@ -284,6 +291,9 @@ struct FfEvent {
     value: i32,
 }
 
+// The one thing in this crate that is not portable. `ioctl` is a Unix call and there is no
+// Windows spelling of it; the whole force-feedback path below is behind the same gate.
+#[cfg(unix)]
 extern "C" {
     fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
 }
@@ -291,7 +301,25 @@ extern "C" {
 impl Motor {
     /// `None` where there is no motor, which is a device that does not buzz rather than a
     /// boot failure.
+    ///
+    /// **The rumble path is the only Unix-shaped thing in the crate** (an `ioctl`), and the
+    /// host never opens a motor at all — `SimPlatform` is what runs there. So the gate is a
+    /// `None`, not a second implementation: nothing on the host can tell the difference, and
+    /// the device build is the `#[cfg(unix)]` arm byte for byte.
     fn open(sysfs: &Path) -> Option<Motor> {
+        #[cfg(unix)]
+        {
+            Self::open_ioctl(sysfs)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = sysfs;
+            None
+        }
+    }
+
+    #[cfg(unix)]
+    fn open_ioctl(sysfs: &Path) -> Option<Motor> {
         let name = rumble_node(sysfs)?;
         let node = fs::OpenOptions::new()
             .read(true)
@@ -397,6 +425,26 @@ fn charge_at(dir: &Path) -> Charge {
     }
 }
 
+/// The radio this session may have raised comes down before the machine is asked to
+/// restart or power off. A live Wi-Fi driver can hold the shutdown on a black screen —
+/// upstream fixed exactly this in v1.7.0 (Restart) and v1.8.0 (power off, lid timer) —
+/// and neither dock's session is guaranteed to drop it for us any more: AGS-102 did it
+/// in its own session, BaseOS never did. Both scripts are best effort and silent, so a
+/// card with no radio up, or no scripts on it at all, has nothing to do here.
+///
+/// Not a `Platform` method: it shells out to the card's own scripts, which is the one
+/// thing this trait deliberately knows nothing about.
+fn radio_down(root: &Path) {
+    let _ = Command::new("/bin/sh")
+        .arg(root.join("System/slotlink.sh"))
+        .args(["link", "down"])
+        .status();
+    let _ = Command::new("/bin/sh")
+        .arg(root.join("System/slotnet.sh"))
+        .arg("down")
+        .status();
+}
+
 impl Platform for DevicePlatform {
     /// Step 0 is the panel off rather than the panel dim: it is what the lid closes with, and
     /// any floor under it lights a shut clamshell.
@@ -469,6 +517,7 @@ impl Platform for DevicePlatform {
     }
 
     fn restart(&mut self) -> ! {
+        radio_down(&self.root);
         self.breadcrumb("restart: reached slot, about to sync");
         let _ = Command::new("sync").status();
         self.breadcrumb("restart: sync returned, about to signal init");
@@ -478,6 +527,7 @@ impl Platform for DevicePlatform {
     }
 
     fn poweroff(&mut self) -> ! {
+        radio_down(&self.root);
         self.breadcrumb("poweroff: reached slot, about to sync");
         let _ = Command::new("sync").status();
         self.breadcrumb("poweroff: sync returned, about to signal init");

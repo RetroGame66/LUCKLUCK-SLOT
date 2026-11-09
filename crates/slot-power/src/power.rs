@@ -5,23 +5,43 @@ use crate::{Battery, Charge, LedState, LidPolicy, Platform};
 /// The lid policy and the panel it acts on, which have to be one object because the policy
 /// takes no arguments. `depth` and `timeout` are constructor values: spec section 9 defers
 /// both to hardware bring-up and neither forks the code.
+///
+/// `timeout` is the exception, and only because a card can now be asked for it: `new` takes the
+/// value the frontend falls back on, and `set_timeout` replaces it with the one the user chose.
+/// It stays a field rather than being read from the card here because this crate does not know
+/// what a card is — the frontend hands the answer over as soon as it has read it, and again
+/// every time the setting changes.
+///
+/// ★ **It is an `Option`, because the setting has a value that means "no timer at all"**: the
+/// screen's 「仅息屏」 / "Screen Off Only" darkens the panel on a shut lid and never stops the
+/// machine. That cannot be spelled `Duration::ZERO` — zero is the *shortest* wait, so a zero
+/// timeout is already expired on the next frame and the lid would power the device off the
+/// instant it shut, which is the exact opposite of what the choice says.
 pub struct Power {
     platform: Box<dyn Platform>,
     /// What the panel goes back to on open. The platform has no getter, so remembering
     /// every step that passed through here is the only way to know.
     level: u8,
     closed: bool,
-    timeout: Duration,
+    timeout: Option<Duration>,
 }
 
 impl Power {
-    pub fn new(platform: Box<dyn Platform>, timeout: Duration) -> Self {
+    pub fn new(platform: Box<dyn Platform>, timeout: Option<Duration>) -> Self {
         Power {
             platform,
             level: 0,
             closed: false,
             timeout,
         }
+    }
+
+    /// How long a shut lid waits before the machine stops, or `None` for a timer switched off.
+    /// Takes effect on the next doze, so a card changed while the lid is already down keeps the
+    /// timer it went down with — which is right: the setting is what the *next* walk-away waits
+    /// for.
+    pub fn set_timeout(&mut self, timeout: Option<Duration>) {
+        self.timeout = timeout;
     }
 
     /// A level set while the lid is shut is remembered rather than lit. The keyboard still
@@ -91,7 +111,10 @@ impl LidPolicy for Power {
         self.platform.set_backlight(self.level);
     }
 
-    fn timeout(&self) -> Duration {
+    /// `None` is a fit answer for "how long": the policy's own answer is that there is no
+    /// timer, and a caller that wants a number has to say what it does without one (see
+    /// `App::doze_expired`, which refuses to expire).
+    fn timeout(&self) -> Option<Duration> {
         self.timeout
     }
 }

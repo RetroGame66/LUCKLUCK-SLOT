@@ -58,7 +58,7 @@ fn power() -> (Power, Arc<AtomicU8>) {
         step: step.clone(),
         clock: 0,
     };
-    (Power::new(Box::new(panel), Duration::from_secs(60)), step)
+    (Power::new(Box::new(panel), Some(Duration::from_secs(60))), step)
 }
 
 fn lit() -> (Power, Arc<AtomicU8>) {

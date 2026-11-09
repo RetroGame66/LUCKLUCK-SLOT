@@ -1,6 +1,6 @@
 use slot_input::RawEvent::{Down, Up};
 use slot_input::{
-    Action::*, Btn, Btn::*, Gestures, RawEvent, COLOR_HOLD_MS, MENU_HOLD_MS, POWER_HOLD_MS,
+    Action::*, Btn, Btn::*, Gestures, RawEvent, A_HOLD_MS, MENU_HOLD_MS, POWER_HOLD_MS,
     SELECT_CHORD_MS, SELECT_TAP_MS, VOLUME_REPEAT_DELAY_MS, VOLUME_REPEAT_MS,
 };
 
@@ -36,6 +36,16 @@ fn select_chords_map_to_all_four_axes() {
     }
 }
 
+/// ★ 2026-11-03（六六）：L3 直接呼出亮度调节、R3 直接呼出蓝光调节，无需按 SELECT。松开只消费。
+#[test]
+fn l3_r3_summon_brightness_and_blue_light() {
+    for (btn, want) in [(Btn::L3, BrightnessUp), (Btn::R3, BlueLightUp)] {
+        let mut g = Gestures::new();
+        assert_eq!(g.feed(RawEvent::Down(btn), 0), vec![want]);
+        assert!(g.feed(RawEvent::Up(btn), 10).is_empty());
+    }
+}
+
 #[test]
 fn select_and_volume_keys_switch_the_audio_profile() {
     for (btn, want) in [
@@ -53,6 +63,7 @@ fn select_and_volume_keys_switch_the_audio_profile() {
 /// START is also the shelf's core picker on its own, which is what makes this worth holding at
 /// the gesture layer rather than only at the app's: the chord has to swallow the press, or the
 /// picker would open under the mode change and the shelf would come back with its lid off.
+/// ★ 2026-10-20：这条是**货架的主题切换**，游戏里它本来就不响应，所以不动。
 #[test]
 fn select_and_start_toggle_the_mode() {
     let mut g = Gestures::new();
@@ -78,6 +89,30 @@ fn start_alone_is_still_the_game_button() {
     );
 }
 
+/// ★ 2026-10-21：**同一条和弦，有卡的时候是游戏的。** 这是那句"只解开游戏中的关联"落到
+/// 代码上的样子 —— 货架上 `SELECT+START` 仍然是主题（上面那条），游戏里它必须原封不动地
+/// 到核心：START 按下/释放各一条 `GbaDown`/`GbaUp`，而 SELECT 只是被推迟，并不被吞掉，
+/// 所以按住 SELECT 再按 START 在游戏看来就是"SELECT 和 START 都按了"。
+///
+/// 顺带钉住解绑的边界：`start_to_game` 只影响这一点，别的和弦一个不少。
+#[test]
+fn select_and_start_belong_to_the_game_while_a_cart_is_seated() {
+    let mut g = Gestures::new();
+    g.set_start_to_game(true);
+    g.feed(Down(Select), 0);
+    assert_eq!(g.feed(Down(Start), 10), vec![GbaDown(Start)]);
+    // The chord window still runs out, and SELECT goes to the core as well.
+    assert_eq!(g.tick(SELECT_CHORD_MS), vec![GbaDown(Select)]);
+    assert_eq!(g.feed(Up(Start), 200), vec![GbaUp(Start)]);
+    assert_eq!(g.feed(Up(Select), 210), vec![GbaUp(Select)]);
+    // Every other chord is untouched by the switch.
+    let mut g = Gestures::new();
+    g.set_start_to_game(true);
+    g.feed(Down(Select), 0);
+    assert_eq!(g.feed(Down(R1), 10), vec![SaveState]);
+    assert_eq!(g.feed(Down(X), 20), vec![MaskCycle]);
+}
+
 #[test]
 fn select_released_inside_the_window_still_reaches_the_game() {
     let mut g = Gestures::new();
@@ -93,17 +128,20 @@ fn select_released_inside_the_window_still_reaches_the_game() {
 fn menu_single_tap_opens_the_about_screen() {
     let mut g = Gestures::new();
     assert!(g.feed(Down(Menu), 0).is_empty(), "acted on the press");
-    assert_eq!(g.feed(Up(Menu), 100), vec![OpenAbout]);
+    assert_eq!(g.feed(Up(Menu), 100), vec![OpenMenu]);
     assert!(g.tick(451).is_empty(), "fired a second time on the timer");
 }
 
-/// The hold is an eject and nothing else. A press long enough to eject is not also a tap, or
-/// letting go of one would drop the about screen over the shelf the cart just came back to.
+/// The hold is an eject and nothing else **at the app's end** — but the gesture layer cannot
+/// see the screen, so since 2026-10-06 one hold emits two actions, `Eject` + `MenuHold`, and
+/// each screen takes the one it means (the shelf ejects, the tape deck leaves the player).
+/// What it is still not is also a tap: letting go of one must not drop the about screen over
+/// the shelf the cart just came back to.
 #[test]
 fn a_menu_hold_is_not_also_a_tap() {
     let mut g = Gestures::new();
     g.feed(Down(Menu), 0);
-    assert_eq!(g.tick(MENU_HOLD_MS), vec![Eject]);
+    assert_eq!(g.tick(MENU_HOLD_MS), vec![Eject, MenuHold]);
     assert!(g.feed(Up(Menu), MENU_HOLD_MS + 50).is_empty());
 }
 
@@ -120,7 +158,7 @@ fn menu_hold_ejects_at_the_hold_time_and_not_before() {
     let mut g = Gestures::new();
     g.feed(Down(Menu), 0);
     assert!(g.tick(MENU_HOLD_MS - 1).is_empty());
-    assert_eq!(g.tick(MENU_HOLD_MS), vec![Eject]);
+    assert_eq!(g.tick(MENU_HOLD_MS), vec![Eject, MenuHold]);
 }
 
 #[test]
@@ -385,7 +423,7 @@ fn a_chorded_menu_never_arms_the_eject_hold() {
 fn a_chord_after_a_recent_menu_tap_is_still_the_menu() {
     let mut g = Gestures::new();
     g.feed(Down(Menu), 0);
-    assert_eq!(g.feed(Up(Menu), 100), vec![OpenAbout]);
+    assert_eq!(g.feed(Up(Menu), 100), vec![OpenMenu]);
     g.feed(Down(Select), 150);
     assert_eq!(
         g.feed(Down(Menu), 200),
@@ -405,7 +443,7 @@ fn menu_under_a_select_the_game_already_has_is_not_the_menu() {
         g.feed(Down(Menu), 700).is_empty(),
         "a SELECT the game already owns still chorded"
     );
-    assert_eq!(g.feed(Up(Menu), 800), vec![OpenAbout]);
+    assert_eq!(g.feed(Up(Menu), 800), vec![OpenMenu]);
 }
 
 /// The chord clears both of MENU's own windows, so the press after it has to start its own.
@@ -418,7 +456,7 @@ fn menu_under_a_select_the_game_already_has_is_not_the_menu() {
 fn the_menu_button_still_works_after_a_chord() {
     let mut g = Gestures::new();
     g.feed(Down(Menu), 0);
-    assert_eq!(g.feed(Up(Menu), 100), vec![OpenAbout]);
+    assert_eq!(g.feed(Up(Menu), 100), vec![OpenMenu]);
     g.feed(Down(Select), 150);
     assert_eq!(g.feed(Down(Menu), 200), vec![GameMenu]);
     assert!(g.feed(Up(Menu), 250).is_empty());
@@ -429,43 +467,17 @@ fn the_menu_button_still_works_after_a_chord() {
     );
     assert_eq!(
         g.feed(Up(Menu), 450),
-        vec![OpenAbout],
+        vec![OpenMenu],
         "the chord left the menu button dead"
     );
 }
 
-/// SELECT+Y is the one chord that is two gestures on one press: tapped it walks the palette
-/// page, held it opens the palette browser. Everything below is that one sentence.
+/// SELECT+Y 是一条**只有松手才落定**的和弦：按下不消费，松手发一次 `ColorCycle`。
 ///
-/// The press is therefore **not** spent on the way down — every other chord is, and the tests
-/// above are full of `vec![something]` on the `Down`. Here the down emits nothing at all, and
-/// which of the two it was is decided by the threshold in `tick` or, failing that, by the
-/// release. Losing that distinction is how one key becomes two that fire together: a hold that
-/// also walks leaves the user on a different palette from the one they were aiming at when the
-/// panel opens.
-const Y_HOLD: u64 = COLOR_HOLD_MS;
-
-#[test]
-fn select_and_y_held_opens_the_palette_browser() {
-    let mut g = Gestures::new();
-    assert!(
-        g.feed(Down(Select), 0).is_empty(),
-        "SELECT is deferred behind the chord window anyway"
-    );
-    assert!(
-        g.feed(Down(Y), 10).is_empty(),
-        "the chord's press must not be spent: the two halves are not distinguishable yet"
-    );
-    assert!(g.tick(10 + Y_HOLD - 1).is_empty(), "not yet");
-    assert_eq!(
-        g.tick(10 + Y_HOLD),
-        vec![ColorHold],
-        "the hold is delivered at the threshold, while the key is still down"
-    );
-    // And the release owes nothing: the panel it opened is up, and B is what puts it away.
-    assert!(g.feed(Up(Y), 10 + Y_HOLD + 200).is_empty());
-    assert!(g.feed(Up(Select), 10 + Y_HOLD + 210).is_empty());
-}
+/// 长按曾经开色板浏览器（2026-10-26 六六取消，浏览器改从游戏菜单进），
+/// 所以现在的规则很朴素：**按住多久都只算一次 `ColorCycle`，中途不再发任何动作**。
+/// 这一整块就是"没有中途"这个不变式的证据：无论 hold 多久、tick 多少次、
+/// SELECT 谁先放，输出序列都是恰好一次 `ColorCycle`，且这条按下不泄漏给游戏。
 
 #[test]
 fn a_select_y_tap_walks_the_palette_page() {
@@ -475,87 +487,39 @@ fn a_select_y_tap_walks_the_palette_page() {
     assert_eq!(
         g.feed(Up(Y), 60),
         vec![ColorCycle],
-        "a tap is the walk, delivered on the release because the press could still have grown"
+        "松手发一次 walk，因为按下没消费（这一按仍可能长成别的和弦）"
     );
-    // The threshold must not reach back for a press that is already over.
-    assert!(g.tick(10 + Y_HOLD * 4).is_empty());
     assert!(g.feed(Up(Select), 70).is_empty());
 }
 
+/// 按住很久也不开任何面板：`tick` 一路空输出，只到 Y 松手那一下才发 `ColorCycle`。
+/// 这也是"没有 hold 中途"的直接断言 —— 若某一刻 `tick` 里又冒出来动作，就是它回归了。
 #[test]
-fn the_two_halves_of_select_y_are_mutually_exclusive() {
-    // The hold, watched all the way to the end of the press: a walk would show up here.
+fn a_select_y_hold_also_would_only_walk_once() {
     let mut g = Gestures::new();
     let mut out = Vec::new();
     out.extend(g.feed(Down(Select), 0));
     out.extend(g.feed(Down(Y), 10));
-    out.extend(g.tick(10 + Y_HOLD));
-    out.extend(g.tick(10 + Y_HOLD * 10));
-    out.extend(g.feed(Up(Y), 10 + Y_HOLD * 10 + 10));
-    out.extend(g.feed(Up(Select), 10 + Y_HOLD * 10 + 20));
-    assert_eq!(out, vec![ColorHold], "the hold also walked the page");
-}
-
-#[test]
-fn the_browser_opens_once_per_press_not_once_per_tick() {
-    let mut g = Gestures::new();
-    g.feed(Down(Select), 0);
-    g.feed(Down(Y), 10);
-    let mut holds = 0;
-    for t in 10..10 + Y_HOLD * 5 {
-        holds += g.tick(t).iter().filter(|a| **a == ColorHold).count();
+    // 按住一路 tick 上千毫秒，中间不应有 `ColorCycle`，更不应有任何面板级动作。
+    for t in 60..2000 {
+        out.extend(g.tick(t));
     }
-    assert_eq!(holds, 1, "the threshold is an edge, not a level");
-}
-
-#[test]
-fn a_select_y_hold_never_reaches_the_game() {
-    let mut g = Gestures::new();
-    g.feed(Down(Select), 0);
-    g.feed(Down(Y), 10);
-    g.tick(10 + Y_HOLD);
-    let mut out = g.feed(Up(Y), 10 + Y_HOLD + 100);
-    out.extend(g.feed(Up(Select), 10 + Y_HOLD + 110));
-    // SELECT's own press is owed to the game only when it was never chorded; the `GbaUp` for it
-    // is emitted by `select_up` on the release, and the down was swallowed, so nothing here.
-    assert!(out.is_empty(), "a chorded press leaked to the game: {out:?}");
-}
-
-#[test]
-fn a_second_press_arms_its_own_hold() {
-    let mut g = Gestures::new();
-    g.feed(Down(Select), 0);
-    g.feed(Down(Y), 10);
-    assert_eq!(g.tick(10 + Y_HOLD), vec![ColorHold]);
-    g.feed(Up(Y), 10 + Y_HOLD + 50);
-    g.feed(Up(Select), 10 + Y_HOLD + 60);
-    // The next press is a fresh gesture, and this one is a tap: the fired flag from the last
-    // press must not turn it into a second hold.
-    g.feed(Down(Select), 1000);
-    g.feed(Down(Y), 1010);
-    assert!(g.tick(1010 + Y_HOLD - 1).is_empty(), "the flag was left set");
-    assert_eq!(g.feed(Up(Y), 1010 + Y_HOLD - 1), vec![ColorCycle]);
-}
-
-#[test]
-fn y_released_just_short_of_the_threshold_walks() {
-    let mut g = Gestures::new();
-    g.feed(Down(Select), 0);
-    g.feed(Down(Y), 10);
-    assert!(g.tick(10 + Y_HOLD - 1).is_empty());
-    assert_eq!(g.feed(Up(Y), 10 + Y_HOLD - 1), vec![ColorCycle]);
+    assert!(out.is_empty(), "按住期间漏出了动作：{out:?}");
+    out.extend(g.feed(Up(Y), 2100));
+    out.extend(g.feed(Up(Select), 2110));
+    assert_eq!(out, vec![ColorCycle], "整段按住只应换来松手那一次 walk：{out:?}");
 }
 
 #[test]
 fn a_select_released_under_a_held_y_owes_nothing() {
-    // SELECT let go first, with Y still down and the panel already open. The chord's own
-    // release handling must survive SELECT going away underneath it.
+    // SELECT 先松，Y 还在按：松手序列仍应恰好是一次 `ColorCycle`。
     let mut g = Gestures::new();
     g.feed(Down(Select), 0);
     g.feed(Down(Y), 10);
-    assert_eq!(g.tick(10 + Y_HOLD), vec![ColorHold]);
-    assert!(g.feed(Up(Select), 10 + Y_HOLD + 20).is_empty());
-    assert!(g.feed(Up(Y), 10 + Y_HOLD + 400).is_empty(), "the hold also walked");
+    assert!(g.tick(1000).is_empty(), "按住期间就发了动作");
+    let mut out = g.feed(Up(Select), 1100);
+    out.extend(g.feed(Up(Y), 1500));
+    assert_eq!(out, vec![ColorCycle], "SELECT 先松仍应只换一次 walk：{out:?}");
 }
 
 /// And with no SELECT down, Y is the game's again — the chord does not take the button.
@@ -565,9 +529,9 @@ fn y_without_select_is_still_the_games_y() {
     assert_eq!(g.feed(Down(Y), 0), vec![GbaDown(Y)]);
     assert_eq!(g.feed(Up(Y), 40), vec![GbaUp(Y)]);
     // ...and holding it is not a hold, because there is no chord to be the hold half of.
-    assert!(g.tick(0 + Y_HOLD * 3).is_empty());
+    assert!(g.tick(3000).is_empty());
     assert_eq!(g.feed(Down(Y), 2000), vec![GbaDown(Y)]);
-    assert_eq!(g.feed(Up(Y), 2000 + Y_HOLD * 3), vec![GbaUp(Y)]);
+    assert_eq!(g.feed(Up(Y), 4000), vec![GbaUp(Y)]);
 }
 
 /// The chord leaves nothing behind for the next press to find.
@@ -577,20 +541,221 @@ fn y_without_select_is_still_the_games_y() {
 /// changes the meaning of a press that comes much later.
 #[test]
 fn the_y_button_still_works_after_a_chord() {
-    for (label, hold) in [("held", true), ("tapped", false)] {
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    g.feed(Down(Y), 10);
+    // 按住一阵（模拟长按），但期间不产生任何动作。
+    g.tick(1000);
+    g.feed(Up(Y), 1050);
+    g.feed(Up(Select), 1060);
+    assert_eq!(
+        g.feed(Down(Y), 5000),
+        vec![GbaDown(Y)],
+        "the bare Y after the chord was not the game's"
+    );
+    assert_eq!(g.feed(Up(Y), 5040), vec![GbaUp(Y)]);
+}
+
+// ── PS1: the shoulders belong to the game ────────────────────────────────────────────────────
+//
+// ★ 2026-10-25. `L2`/`R2` are rewind and fast forward on every machine — except a PlayStation,
+// where they are real pad buttons. `set_l2r2_to_game` moves a **bare** press to the core and
+// leaves `SELECT+L2/R2` as the transport, and these two tests are the whole of that contract:
+// one that the trade happens, one that it does not quietly eat the transport.
+
+/// On PS1 a bare press is the game's, in both directions — and neither one may leave fast
+/// forward or rewind running, because that press was never the transport's.
+#[test]
+fn a_bare_shoulder_is_the_games_when_the_machine_asks_for_it() {
+    for b in [L2, R2] {
         let mut g = Gestures::new();
-        g.feed(Down(Select), 0);
-        g.feed(Down(Y), 10);
-        if hold {
-            g.tick(10 + Y_HOLD);
-        }
-        g.feed(Up(Y), 10 + Y_HOLD + 50);
-        g.feed(Up(Select), 10 + Y_HOLD + 60);
+        g.set_l2r2_to_game(true);
         assert_eq!(
-            g.feed(Down(Y), 5000),
-            vec![GbaDown(Y)],
-            "a bare Y after the {label} chord was not the game's"
+            g.feed(Down(b), 0),
+            vec![GbaDown(b)],
+            "a bare {b:?} on PS1 was not handed to the game"
         );
-        assert_eq!(g.feed(Up(Y), 5040), vec![GbaUp(Y)]);
+        // No transport leaked out of it: the tick has nothing to say, and the release is the
+        // core's up edge rather than an `FfStop`/`RewindStop` for something that never started.
+        assert!(g.tick(5_000).is_empty(), "{b:?} started a transport");
+        assert!(!g.ff_latched(), "{b:?} latched fast forward");
+        assert_eq!(g.feed(Up(b), 5000), vec![GbaUp(b)]);
     }
+}
+
+/// The other half of the trade: **`SELECT` still owns the shoulders, on PS1 too.** The chord
+/// window is not a tap — a SELECT held far past it is still "SELECT is down", and the shoulder
+/// pressed under it must stay the transport, or a PlayStation loses rewind altogether.
+#[test]
+fn select_and_a_shoulder_is_still_the_transport_on_ps1() {
+    // L2 → rewind, R2 → fast forward, one case each.
+    for (b, start, stop) in [(L2, RewindStart, RewindStop), (R2, FfStart, FfStop)] {
+        let mut g = Gestures::new();
+        g.set_l2r2_to_game(true);
+        g.feed(Down(Select), 0);
+        assert_eq!(
+            g.feed(Down(b), 50),
+            vec![start],
+            "SELECT+{b:?} stopped being the transport on PS1"
+        );
+        assert_eq!(g.feed(Up(b), 100), vec![stop], "the transport did not stop");
+        // And the release of the shoulder must not reach the core either — it was a chord.
+        assert!(g.feed(Up(Select), 150).is_empty());
+    }
+}
+
+/// Past the chord window the chord is gone but SELECT is not: `Select::Delivered` means the
+/// game has SELECT, and a shoulder pressed then is still a two-key gesture. This is the case
+/// the first draft got wrong — the transport check was reading the chord window alone.
+#[test]
+fn a_shoulder_after_the_chord_window_is_still_the_transport_on_ps1() {
+    let mut g = Gestures::new();
+    g.set_l2r2_to_game(true);
+    g.feed(Down(Select), 0);
+    assert_eq!(g.tick(SELECT_CHORD_MS), vec![GbaDown(Select)]);
+    assert_eq!(
+        g.feed(Down(R2), SELECT_CHORD_MS + 1_000),
+        vec![FfStart],
+        "a long-held SELECT gave the shoulder away to the game"
+    );
+}
+
+/// Without the flag nothing changes at all — this is the GBA/GB/GBC/SFC/FC/MD path, and it is
+/// the one every machine but a PlayStation has always taken.
+#[test]
+fn a_bare_shoulder_is_the_transport_when_the_machine_does_not_ask() {
+    for (b, start, stop) in [(L2, RewindStart, RewindStop), (R2, FfStart, FfStop)] {
+        let mut g = Gestures::new();
+        assert_eq!(g.feed(Down(b), 0), vec![start]);
+        assert_eq!(g.feed(Up(b), 50), vec![stop]);
+    }
+}
+
+// ── 卡座上 `A` 的短按 / 长按（★ 2026-11-02 六六） ─────────────────────────────────────────
+//
+// `set_a_to_deck` 是手势层第一次看见"现在这块屏是不是播放器"。为假（游戏 / 货架 / 菜单，
+// 也就是默认）时裸 `A` 就是游戏的，按下松手各一拍，一行不改；为真时**按下压住不发**，
+// 松手判成短按（补发一次 `GbaDown(A)`，app 读作播放/暂停），或按满 `A_HOLD_MS` 判成长按
+// （发 `DeckStop`，app 读作停止），长按的松手就不再欠那个短按。
+
+/// The default reading: not the deck, so a bare `A` is the game's — down and up, no deferral.
+#[test]
+fn a_bare_a_is_the_games_when_not_on_the_deck() {
+    let mut g = Gestures::new();
+    assert_eq!(g.feed(Down(A), 0), vec![GbaDown(A)]);
+    assert_eq!(g.feed(Up(A), 40), vec![GbaUp(A)]);
+    assert!(
+        g.tick(3_000).is_empty(),
+        "no deck, no A hold, so nothing is owed on the timer"
+    );
+}
+
+/// On the deck a quick `A` says nothing on the press — it is held for the short/long call
+/// — and the release is what owes the play/pause down.
+#[test]
+fn a_tap_of_a_on_the_deck_defers_the_down_to_the_release() {
+    let mut g = Gestures::new();
+    g.set_a_to_deck(true);
+    assert!(
+        g.feed(Down(A), 0).is_empty(),
+        "acted on the press; the call is not made yet"
+    );
+    assert!(g.tick(A_HOLD_MS - 1).is_empty(), "fired the stop early");
+    assert_eq!(
+        g.feed(Up(A), 400),
+        vec![GbaDown(A)],
+        "the tap is the play/pause, delivered on the release"
+    );
+    assert!(g.tick(500).is_empty(), "owed nothing after a tap that paid off");
+}
+
+/// Held past the threshold the deck stops rather than pauses: the stop fires at the hold,
+/// on the timer, and the release of a hold does not also deliver the tap.
+#[test]
+fn a_hold_of_a_on_the_deck_is_the_stop() {
+    let mut g = Gestures::new();
+    g.set_a_to_deck(true);
+    assert!(g.feed(Down(A), 0).is_empty());
+    assert!(g.tick(A_HOLD_MS - 1).is_empty(), "stopped a millisecond early");
+    assert_eq!(g.tick(A_HOLD_MS), vec![DeckStop], "the threshold is the stop");
+    assert!(
+        g.tick(A_HOLD_MS + 500).is_empty(),
+        "the stop fires once, not per tick"
+    );
+    assert_eq!(
+        g.feed(Up(A), A_HOLD_MS + 500),
+        Vec::new(),
+        "a hold that already stopped is not also a play/pause on the release"
+    );
+}
+
+/// The hold and the tap share one state machine, so a tap after a hold still taps: whatever
+/// the hold left behind must not make the next press into a stop.
+#[test]
+fn a_tap_after_a_hold_on_the_deck_still_taps() {
+    let mut g = Gestures::new();
+    g.set_a_to_deck(true);
+    // A hold, cleared.
+    g.feed(Down(A), 0);
+    assert_eq!(g.tick(A_HOLD_MS), vec![DeckStop]);
+    assert!(g.feed(Up(A), A_HOLD_MS + 100).is_empty());
+    // And a tap on the next press.
+    assert!(g.feed(Down(A), 2_000).is_empty());
+    assert_eq!(
+        g.feed(Up(A), 2_500),
+        vec![GbaDown(A)],
+        "the hold's state leaked into the next tap"
+    );
+}
+
+/// The deck flag is a per-frame fact: the same key is the game's the frame the deck is gone,
+/// so leaving the deck mid-press hands the press back to the core rather than deferring it.
+#[test]
+fn taking_a_off_the_deck_makes_a_the_games_again() {
+    let mut g = Gestures::new();
+    g.set_a_to_deck(true);
+    assert!(g.feed(Down(A), 0).is_empty());
+    // The deck left the screen before the release: the press is the game's now.
+    g.set_a_to_deck(false);
+    assert_eq!(g.feed(Up(A), 400), vec![GbaDown(A)]);
+}
+
+/// ★ 2026-11-05 排查（玩家报「货架字母轮 R 键失灵」）：把 R1 的两条腿钉死。
+///
+/// 字母轮的 R 是**裸 R1**（`GbaDown(R1)` → `step_letters(1)`）；主题配色是 `SELECT+R1`
+/// （`SaveState` → `cycle_look`）。两根腿共用一颗物理键，判据只有"SELECT 是不是在
+/// 和弦窗口里"。任何一条被另一条吞掉，都要在这里红。
+#[test]
+fn bare_r1_is_the_letter_index_and_only_a_fresh_select_makes_it_the_look() {
+    // ① 裸 R1：按下发 GbaDown，抬起发 GbaUp —— 字母轮的 `hold`/`release` 靠这一对。
+    let mut g = Gestures::new();
+    assert_eq!(g.feed(Down(R1), 0), vec![GbaDown(R1)]);
+    assert_eq!(g.feed(Up(R1), 20), vec![GbaUp(R1)]);
+
+    // ② SELECT 按着、600 ms 窗口内：这一按是主题，不是字母。
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    assert_eq!(g.feed(Down(R1), 100), vec![SaveState]);
+    assert!(g.feed(Up(R1), 150).is_empty(), "和弦的抬起要吞掉");
+    g.feed(Up(Select), 160);
+
+    // ③ 和弦松完再按 R1：回到字母轮，且 up 不被上一次的 chord_held 吞掉。
+    assert_eq!(g.feed(Down(R1), 400), vec![GbaDown(R1)]);
+    assert_eq!(
+        g.feed(Up(R1), 420),
+        vec![GbaUp(R1)],
+        "上一次 SELECT+R1 的 chord_held 没清干净：字母轮会卡住不放"
+    );
+}
+
+/// SELECT 按住超过和弦窗口（`Delivered`）之后按 R1：手势层不再找和弦表，
+/// 这一按是裸 R1 ⇒ **翻字母**。也就是说同一个手型"早按=主题、晚按=字母"。
+#[test]
+fn r1_after_a_long_held_select_is_the_letter_index_again() {
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    assert_eq!(g.tick(SELECT_CHORD_MS), vec![GbaDown(Select)]);
+    assert_eq!(g.feed(Down(R1), SELECT_CHORD_MS + 50), vec![GbaDown(R1)]);
+    assert_eq!(g.feed(Up(R1), SELECT_CHORD_MS + 80), vec![GbaUp(R1)]);
+    g.feed(Up(Select), SELECT_CHORD_MS + 100);
 }

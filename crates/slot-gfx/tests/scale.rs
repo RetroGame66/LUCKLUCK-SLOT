@@ -1,4 +1,6 @@
-use slot_gfx::{blit_rect, blit_rect_fit, fit_rect, fit_scale};
+use slot_gfx::{
+    blit_rect, blit_rect_fit, fit_rect, fit_scale, scale_for, System, NEOGEO_SRC_W, OUT_H, OUT_W,
+};
 
 #[test]
 fn integer_scale_never_fractional() {
@@ -49,4 +51,43 @@ fn the_fit_is_centred_and_shakes_with_the_picture() {
     assert_eq!((x, w), ((800 - w) / 2, 720));
     assert_eq!((y, h), (0, 480));
     assert!(blit_rect_fit((800, 480), 6.0).0 > x);
+}
+
+// --- the two arcade machines ---------------------------------------------------------------
+//
+// One FBNeo core, two `System` variants, and the whole of the difference between them is
+// where the picture lands. NeoGeo is integer-scaled like the consoles; everything else is
+// stretched into a fixed 4:3 rect. Both are 320x224 boards at source, so the two rects are
+// *not* the same size even though the frame they draw is.
+
+#[test]
+fn neogeo_lands_at_integer_two_like_the_consoles() {
+    assert_eq!(scale_for(320, 224), 2);
+    let (x, y, w, h) = System::Neogeo.screen_base();
+    // ★ 2026-10-28：**608，不是 640。** FBNeo 把 NeoGeo 的 320×224 每边裁 8px overscan
+    //   交过来，所以 `NEOGEO_SRC_W` 是 304（见 `system.rs` 的实测记录：kof97.zip
+    //   `frame N 304x224 pitch 608`）。2× ⇒ 608×448，比 MD 的 640×448 窄 32px。
+    //   这条断言原来写 640，与 `system.rs` 自己的注释互相矛盾；而整条 `scale.rs`
+    //   自 a5e5ea9 起就编译不过（上一行那个 `.into()`），所以没人发现。
+    assert_eq!((w, h), (608.0, 448.0));
+    assert_eq!(NEOGEO_SRC_W, 304);
+    assert_eq!((x, y), ((OUT_W as f32 - 608.0) / 2.0, (OUT_H as f32 - 448.0) / 2.0));
+}
+
+#[test]
+fn the_other_arcade_machines_stretch_into_640x480() {
+    let (x, y, w, h) = System::Arcade.screen_base();
+    assert_eq!((w, h), (640.0, 480.0), "arcade does not fill 4:3");
+    assert_eq!((x, y), ((OUT_W as f32 - 640.0) / 2.0, 0.0));
+    // 320x224 stretched to 640x480 is a 1.14x vertical stretch — the picture is *wider* than
+    // its own aspect, which is the whole point: a cabinet monitor was 4:3 and the board was not.
+    assert!(w / h < 1.5, "the arcade rect is not 4:3");
+}
+
+#[test]
+fn only_the_arcade_machine_stretches() {
+    assert!(System::Arcade.stretches());
+    assert!(!System::Neogeo.stretches());
+    assert!(!System::Sfc.stretches());
+    assert!(!System::Gba.stretches());
 }

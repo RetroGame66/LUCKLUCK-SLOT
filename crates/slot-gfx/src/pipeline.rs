@@ -3,7 +3,11 @@ use crate::power::{screen_brightness, screen_rect_in};
 use crate::quad::Quad;
 use crate::shaders::{GAME_FRAG, RECT_VERT};
 use crate::surface::{GfxError, OUT_H, OUT_W};
-use crate::system::{System, GBA_SRC_H, GBA_SRC_W, GB_SRC_H, GB_SRC_W};
+use crate::system::{
+    cell_size, mask_scale, ARCADE_DRAW_H, ARCADE_DRAW_W, FC_SRC_H, FC_SRC_W, GB_SRC_H, GB_SRC_W,
+    GBA_SRC_H, GBA_SRC_W, MD_SRC_H, MD_SRC_W, NEOGEO_SRC_H, NEOGEO_SRC_W, PCE_SRC_H, PCE_SRC_W,
+    PS1_SRC_H, PS1_SRC_W, SFC_SRC_H, SFC_SRC_W, System,
+};
 
 /// The GBA's frame, which is what these two meant when there was one machine. Anything that
 /// wants a source size should ask `System` for the one it is drawing.
@@ -16,11 +20,30 @@ const IDENTITY_CC: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 pub struct GamePass {
     prog: gl::types::GLuint,
     /// One texture per machine rather than one rebuilt on a switch, so that switching costs a
-    /// bind and nothing at all else. The two together are 240 KiB — the GBA's frame is
-    /// 153,600 bytes and Game Boy's 92,160 — which is not memory worth saving on anything
-    /// this runs on.
+    /// bind and nothing at all else. Fixed-size machines are made once and never touched again
+    /// after `new`; only `Arcade` is rebuilt on the fly, because its frame size varies per
+    /// board and `System`'s 640x480 is only a nominal layout for the rect.
     game_gba: gl::types::GLuint,
     game_gb: gl::types::GLuint,
+    game_sfc: gl::types::GLuint,
+    game_fc: gl::types::GLuint,
+    game_neogeo: gl::types::GLuint,
+    /// Arcade's slot is also the one that actually gets resized.
+    game_arcade: gl::types::GLuint,
+    game_md: gl::types::GLuint,
+    /// ★ 2026-10-26 00:1x：**改回单纹理**。曾经为了「前端隔行合成」拆成 a/b 两张 +
+    /// 交替上传，但设备实测证明 PCSX 交来的帧既不是逐行缺一半、也不是整帧缺一半
+    /// （见 `.workbuddy/memory/2026-10-25.md` H4），那套机制的前提不成立，已整段拆除。
+    game_ps1: gl::types::GLuint,
+    game_pce: gl::types::GLuint,
+    /// The texture dimensions the last rebuild produced. For every fixed-size machine
+    /// this equals `System::src_w()` / `src_h()`. For `Arcade` (see `System::stretches`)
+    /// and for `Ps1` (PCSX hands over whatever vout size the game is in — see
+    /// `upload`), this is the real size the last frame came in at.
+    ///
+    /// Kept here rather than re-queried from the GL object because the GL call is a
+    /// round-trip and this is read every draw; tracking it in a field is free.
+    texture_size: (u32, u32),
     /// Whose frame `upload` takes and `draw` puts up. The GBA, because it is the machine this
     /// pass was written for.
     active: System,
@@ -52,6 +75,21 @@ pub struct GamePass {
     u_grid: gl::types::GLint,
     u_grid_mix: gl::types::GLint,
     u_grid_scan: gl::types::GLint,
+    /// Row pitch for the scanline lattice: 1 = every source row, 2 = every other. The shader
+    /// currently does not read this — `set_grid_step` accepts it so a caller has a place to
+    /// push the value, and a future `u_grid_step` in GAME_FRAG picks it up with no further
+    /// plumbing. `uniform_location` returns -1 for a name the program does not declare, and
+    /// `Uniform1f(-1, _)` is a documented no-op, so storing the location is harmless either way.
+    u_grid_step: gl::types::GLint,
+    /// ★ 2026-10-28：源尺寸的 uniform 位置。以前 `upload`/`set_system` 每次现查一遍，
+    /// 现在三件几何量一起推（`push_geometry`），存一次省掉每帧的 `glGetUniformLocation`。
+    u_src: gl::types::GLint,
+    /// ★ 2026-10-28：每个源像素在面板上占多少输出像素（`rect/tex`，两轴）。格子线宽由它
+    /// 反算。**几何量**，不是缩放常数 —— PS1 的 320×240 帧落在 640×480 矩形里时是 2。
+    u_cell: gl::types::GLint,
+    /// ★ 2026-10-28：遮罩表的重复次数。整数倍时 == `u_src`（锚源像素，与旧版逐字相同），
+    /// 非整数倍时 == `rect/3`（锚面板像素，拍频归零）。见 `system::mask_scale`。
+    u_mask_scale: gl::types::GLint,
     /// A compositor with nobody driving it is a screen that is on.
     power: f32,
 }
@@ -59,22 +97,42 @@ pub struct GamePass {
 impl GamePass {
     pub fn new() -> Result<Self, GfxError> {
         let prog = crate::shaders::program(RECT_VERT, GAME_FRAG)?;
-        let game_gba = crate::gl::texture(
-            GBA_SRC_W,
-            GBA_SRC_H,
+
+        // Nine source textures, one per `System`. Fixed-size machines each allocate once here
+        // and never again; `game_arcade` starts at the nominal 640x480 and is rebuilt on the
+        // first real frame (see `rebuild_active`). BGRA because libretro hands over
+        // XRGB8888 little-endian, whose bytes are B, G, R, X.
+        let game_gba =
+            crate::gl::texture(GBA_SRC_W, GBA_SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+        let game_gb =
+            crate::gl::texture(GB_SRC_W, GB_SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+        let game_sfc =
+            crate::gl::texture(SFC_SRC_W, SFC_SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+        let game_fc =
+            crate::gl::texture(FC_SRC_W, FC_SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+        let game_neogeo = crate::gl::texture(
+            NEOGEO_SRC_W,
+            NEOGEO_SRC_H,
             gl::NEAREST,
             gl::CLAMP_TO_EDGE,
             gl::BGRA,
             None,
         );
-        let game_gb = crate::gl::texture(
-            GB_SRC_W,
-            GB_SRC_H,
+        let game_arcade = crate::gl::texture(
+            ARCADE_DRAW_W,
+            ARCADE_DRAW_H,
             gl::NEAREST,
             gl::CLAMP_TO_EDGE,
             gl::BGRA,
             None,
         );
+        let game_md =
+            crate::gl::texture(MD_SRC_W, MD_SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+        let game_ps1 =
+            crate::gl::texture(PS1_SRC_W, PS1_SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+        let game_pce =
+            crate::gl::texture(PCE_SRC_W, PCE_SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+
         let mask = crate::gl::texture(
             3,
             3,
@@ -92,6 +150,7 @@ impl GamePass {
             Some(&[0u8; 1024]),
         );
         let pix = crate::gl::texture(1024, 32, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::RGBA, None);
+
         let (
             u_rect,
             u_bright,
@@ -103,6 +162,10 @@ impl GamePass {
             u_grid,
             u_grid_mix,
             u_grid_scan,
+            u_grid_step,
+            u_src,
+            u_cell,
+            u_mask_scale,
         );
         unsafe {
             // What is fixed for the life of the program: which texture unit carries what, and
@@ -138,23 +201,34 @@ impl GamePass {
             gl::Uniform1f(u_grid_mix, 0.0);
             u_grid_scan = crate::gl::uniform_location(prog, "u_grid_scan");
             gl::Uniform1f(u_grid_scan, 0.0);
+            u_grid_step = crate::gl::uniform_location(prog, "u_grid_step");
+            // 1.0 = every source row; the current shader ignores this, but the location is
+            // stored so `set_grid_step` has somewhere to push.
+            gl::Uniform1f(u_grid_step, 1.0);
+            // ★ 2026-10-28：格子线宽与遮罩锚法。位置存下来，数值由 `push_geometry` 推 ——
+            // 它同时要 `u_src`，而 `u_src` 属于"当前这一帧"，见 `upload`。
+            u_src = crate::gl::uniform_location(prog, "u_src");
+            u_cell = crate::gl::uniform_location(prog, "u_cell");
+            u_mask_scale = crate::gl::uniform_location(prog, "u_mask_scale");
             // Off until a palette arrives; the matrix path is what runs by default.
             gl::Uniform1f(u_pal_on, 0.0);
-            // The source size, primed for the machine `active` starts on. `set_system` is a no-op
-            // when the machine has not changed, so a pass that only ever sees an Advance — which
-            // starts as one — would otherwise never upload this at all. Both the aperture mask and
-            // the lattice tile by it, and with it left at zero the lattice's `fract(v_uv * u_src)`
-            // is zero everywhere: no cell ever matches, and the mesh silently never draws.
-            gl::Uniform2f(
-                crate::gl::uniform_location(prog, "u_src"),
-                System::Gba.src_w() as f32,
-                System::Gba.src_h() as f32,
-            );
+            // `u_src` / `u_cell` / `u_mask_scale` 的初值不在这里推：`set_system(Gba)` 在
+            // `new` 末尾调用，而它现在走 `push_geometry`。那个调用**不是** no-op 的保险 ——
+            // `active` 初值就是 `Gba`，所以 `set_system` 会早退。因此 `new` 之后必须
+            // 显式推一次，见下面 `pass.set_system` 前的那一行。
         }
         let mut pass = GamePass {
             prog,
             game_gba,
             game_gb,
+            game_sfc,
+            game_fc,
+            game_neogeo,
+            game_arcade,
+            game_md,
+            game_ps1,
+            game_pce,
+            texture_size: (ARCADE_DRAW_W, ARCADE_DRAW_H),
             active: System::Gba,
             mask,
             u_rect,
@@ -169,10 +243,41 @@ impl GamePass {
             u_grid,
             u_grid_mix,
             u_grid_scan,
+            u_grid_step,
+            u_src,
+            u_cell,
+            u_mask_scale,
             power: 1.0,
         };
+        // ★ `active` 的初值就是 `Gba`，所以下面这句 `set_system(Gba)` 会**早退**（它是
+        // "机器变了才推"）。几何量必须在构造时自己推一次，否则首帧之前 `u_cell` 是 0、
+        // `u_mask_scale` 是 0 ⇒ `texture2D(u_mask, 0)` 取表首格、`1/max(0,1) = 1` 使格子
+        // 全不点亮。这两者在 3× 下恰好"看不出来"（表首格 × 亮度差极小），所以别指望
+        // 少推一次能被发现 —— 它就是错的。
+        pass.push_geometry(System::Gba.src_w(), System::Gba.src_h());
         pass.set_system(System::Gba);
         Ok(pass)
+    }
+
+    /// 把"这一帧的几何"推给 shader：源尺寸、每源像素占多少输出像素、遮罩表重复次数。
+    ///
+    /// ★ 2026-10-28：三件事必须一起推，因为它们互相推导 —— `u_cell` 由画面矩形除以纹理
+    /// 尺寸得来，`u_mask_scale` 又由 `u_cell` 是不是整数倍决定锚源还是锚面板。分开推就会
+    /// 出现"格子按新几何画、遮罩按旧几何铺"的中间态。
+    ///
+    /// 画面矩形取 `screen_base()`，**不是** `screen_rect_in()`：后者带电源收拢（开机那一下
+    /// 从一条线张开），拿它算 `cell` 会让开机瞬间的格宽随动画变。收拢是绘制时的事，
+    /// 遮罩与格子应该按"稳定后的画面"布局 —— 收拢期间画面被压扁，格跟着压扁反而是错的。
+    fn push_geometry(&self, tex_w: u32, tex_h: u32) {
+        let rect = self.active.screen_base();
+        let (cx, cy) = cell_size(rect, tex_w, tex_h);
+        let (mx, my) = mask_scale(rect, tex_w, tex_h);
+        unsafe {
+            gl::UseProgram(self.prog);
+            gl::Uniform2f(self.u_src, tex_w as f32, tex_h as f32);
+            gl::Uniform2f(self.u_cell, cx, cy);
+            gl::Uniform2f(self.u_mask_scale, mx, my);
+        }
     }
 
     /// Whose frame this pass is drawing. Called when a cart goes in or the shelf switches
@@ -182,17 +287,25 @@ impl GamePass {
             return;
         }
         self.active = system;
-        // The mask tiles once per source pixel, so a different frame size is a different
-        // tiling count and nothing more: the 3x3 table is the same table, the filter is the
-        // same filter, and no part of either is written against a resolution.
-        unsafe {
-            gl::UseProgram(self.prog);
-            gl::Uniform2f(
-                crate::gl::uniform_location(self.prog, "u_src"),
-                system.src_w() as f32,
-                system.src_h() as f32,
-            );
-        }
+        // The texture `active_texture` returns is now another one, so its size is the
+        // one the new machine started with: `System`'s nominal pair, except for `Arcade`
+        // which is primed to `ARCADE_DRAW_W/H` in `new` and only shrinks once a real
+        // board shows up. `upload` will overwrite this the first time a frame comes in
+        // at a size it does not already hold, so this is only the size `draw_source`
+        // reads before that first upload — and it is the right size for a machine whose
+        // frame is fixed by `System`.
+        self.texture_size = if self.active == System::Arcade {
+            self.texture_size // unchanged; a rebuilt arcade texture stays rebuilt
+        } else {
+            (self.active.src_w(), self.active.src_h())
+        };
+        self.push_geometry(self.texture_size.0, self.texture_size.1);
+    }
+
+    /// The machine whose frame this pass is currently drawing. Read by `draw_reflection` to tag
+    /// its per-frame debug account (`ReflectDiag::sys`).
+    pub fn active(&self) -> System {
+        self.active
     }
 
     /// The texture `upload` writes into and `draw` puts up, for the machine that is active.
@@ -200,8 +313,16 @@ impl GamePass {
         match self.active {
             System::Gba => self.game_gba,
             System::Gb => self.game_gb,
+            System::Sfc => self.game_sfc,
+            System::Fc => self.game_fc,
+            System::Neogeo => self.game_neogeo,
+            System::Arcade => self.game_arcade,
+            System::Md => self.game_md,
+            System::Ps1 => self.game_ps1,
+            System::Pce => self.game_pce,
         }
     }
+
 
     /// The rect, in offscreen pixels, the game picture currently occupies — what the screen
     /// reflection mirrors about, and how it knows where the letterbox is.
@@ -211,8 +332,16 @@ impl GamePass {
 
     /// The size of the frame the active machine hands over, in pixels. The reflection's blur
     /// step is one over this, so a tap lands on a texel of whatever machine is up.
+    ///
+    /// For a fixed-size machine this is `System::src_w() × src_h()`. For `Arcade` and `Ps1`
+    /// — the two machines whose real frame varies per game — it is whatever the last
+    /// `upload` rebuilt the texture to. `fbo::draw_reflection` uses this to compute the
+    /// blur's sample step (`1/w, 1/h` in UV units), which is the number of texels per UV
+    /// step of the *actual* game texture; asking for the System nominal here would make the
+    /// blur tap every fourth pixel of a 320×240 texture and the reflection would collapse
+    /// to a 4×-too-coarse average.
     pub fn source_size(&self) -> (u32, u32) {
-        (self.active.src_w(), self.active.src_h())
+        self.texture_size
     }
 
     pub fn set_power(&mut self, t: f32) {
@@ -341,6 +470,16 @@ impl GamePass {
         }
     }
 
+    /// 扫描线的行间距：1 = 每行，2 = 每两行。当前 `GAME_FRAG` 尚未声明 `u_grid_step`，
+    /// 这里存下位置并推一次数值；`glUniform1f(-1, ..)` 在规范里就是无操作，等 shader
+    /// 补上 uniform 之后这一路不用改。
+    pub fn set_grid_step(&self, step: u32) {
+        unsafe {
+            gl::UseProgram(self.prog);
+            gl::Uniform1f(self.u_grid_step, step.max(1) as f32);
+        }
+    }
+
     /// The lookup texture, so the reflection pass can share it rather than keep a second copy.
     pub fn palette_texture(&self) -> gl::types::GLuint {
         self.pal
@@ -355,14 +494,113 @@ impl GamePass {
         }
     }
 
-    pub fn upload(&mut self, xrgb8888: &[u8]) {
-        let (w, h) = (self.active.src_w(), self.active.src_h());
+    /// Rebuild the active machine's texture at the given size. Called from `upload` when the
+    /// incoming frame does not fit the texture as it stands today.
+    ///
+    /// Fixed-size machines never reach here: their frame is always `System::src_w() × src_h()`,
+    /// which is the size `new` allocated them for, so the mismatch check bails out on the first
+    /// comparison and `upload` writes straight into the texture it already has.
+    ///
+    /// The two machines whose frame genuinely varies:
+    ///
+    /// * `Arcade` — see `System::stretches`; a real CPS1 board hands over 384×224, and the
+    ///   nominal 640×480 in `ARCADE_DRAW_W/H` is only a layout hint for the rect, not a
+    ///   promise about what the core sends.
+    /// * `Ps1` — PCSX_ReARmed's `vout_set_mode` picks `vout_width` and `vout_height` from
+    ///   the game's real `raw_w` / `raw_h` (see `_scratch-ws/pcsxsrc/libretro.c:340`). A
+    ///   15-bit low-res title sends 320×240 while `System::Ps1`'s nominal is 640×480.
+    ///
+    /// A texture that is bigger than the frame it holds carries undefined pixels in the
+    /// uncovered region (see `gl::texture(..., None)` — `TexImage2D` with a null pointer
+    /// leaves the content alone), and the shader then reads them through as if they were
+    /// part of the picture. Rebuilding to the frame's own size is the only honest fix:
+    /// once the texture is exactly as big as the frame, every texel is a real game pixel
+    /// and `CLAMP_TO_EDGE` has nothing garbage to hand back at the seam.
+    fn rebuild_active(&mut self, w: u32, h: u32) {
+        if w == 0 || h == 0 || (w, h) == self.texture_size {
+            return;
+        }
+        unsafe {
+            match self.active {
+                System::Arcade => {
+                    gl::DeleteTextures(1, &self.game_arcade);
+                    self.game_arcade =
+                        crate::gl::texture(w, h, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+                }
+                System::Ps1 => {
+                    gl::DeleteTextures(1, &self.game_ps1);
+                    self.game_ps1 =
+                        crate::gl::texture(w, h, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+                }
+                System::Gba | System::Gb | System::Sfc | System::Fc | System::Neogeo
+                | System::Md | System::Pce => {
+                    // A fixed-size machine only lands here when its `System` size changed
+                    // between builds. That is a real mistake — the texture has to match
+                    // what the rest of the pass believes about the machine — so fall back
+                    // to the same handle the shader was pointed at. This branch should not
+                    // fire in practice; if it does, the log is missing a System::src_w
+                    // change somewhere.
+                    gl::DeleteTextures(1, &self.active_texture());
+                    let tex =
+                        crate::gl::texture(w, h, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::BGRA, None);
+                    match self.active {
+                        System::Gba => self.game_gba = tex,
+                        System::Gb => self.game_gb = tex,
+                        System::Sfc => self.game_sfc = tex,
+                        System::Fc => self.game_fc = tex,
+                        System::Neogeo => self.game_neogeo = tex,
+                        System::Md => self.game_md = tex,
+                        System::Pce => self.game_pce = tex,
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            }
+            self.texture_size = (w, h);
+        }
+    }
+
+    pub fn upload(&mut self, xrgb8888: &[u8], w: u32, h: u32) {
+        // Rebuild when the incoming frame does not fit the texture as it stands. For a
+        // fixed-size machine the frame size is always `System::src_w() × src_h()` and so
+        // always equals `texture_size`; the check bails out on the first `!=` and upload
+        // goes straight to `TexSubImage2D`. For `Arcade` and `Ps1` — the two whose real
+        // frame size varies per game — the check finds the mismatch and rebuilds to the
+        // frame's own size (see `rebuild_active` for why a texture bigger than the frame
+        // leaks undefined pixels through the shader).
+        if (w, h) != self.texture_size {
+            self.rebuild_active(w, h);
+        }
         if xrgb8888.len() < (w * h * 4) as usize {
             return;
         }
         unsafe {
+            // `u_src` is what the shader multiplies `v_uv` by to find the sub-pixel within
+            // a source cell: the lattice (`fract(v_uv * u_src)`), the mask tile count, and
+            // the reflection's blur step all read it. It is the *texture's* size, not the
+            // System's — a 320×240 frame inside a 640×480 texture would alias the mask
+            // three times per source pixel rather than once, and the lattice would fire on
+            // two of the three screen positions that map to the same source pixel. Upload
+            // owns it because it is the only caller that knows the real frame's dimensions.
+            //
+            // ★ 2026-10-28：`u_src` 现在连同 `u_cell` / `u_mask_scale` 一起由
+            //   `push_geometry` 推 —— 三者互相推导，不能分开推。
+            self.push_geometry(w, h);
             gl::BindTexture(gl::TEXTURE_2D, self.active_texture());
             gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+            // ★ 2026-10-26：**直接从此切片上传，不先 `to_vec()` 拷一份。**
+            //
+            //   调用方（frontend）持有的 `FrameRef` 会一直活到本帧 `end_frame` 之后才 drop，
+            //   所以这个切片在「纹理真正被 GPU 采样」之前始终有效。Mali 的 `TexSubImage2D`
+            //   走 tiler，往往把「从客户端内存读数据」延迟到纹理首次被采样的瓦片渲染时
+            //   （即本帧末 blit/swap 的那一刻）才做；先前那段 `to_vec()` 把数据放进**函数内
+            //   局部 Vec**，`upload` 返回即释放，延迟拷贝读到的就是已回收、被复用的内存
+            //   ⇒ 偶发整帧黑/花。PS1 帧 300KB，比 GBA 154KB 大一倍，延迟拷贝更可能还悬在
+            //   绘制那一刻 ⇒ 只有 PS1 闪。直传后既修竞态、又省一次每帧 memcpy。
+            //
+            //   安全依据：`self.session.frame()` 经 `Frames::latest()` 把缓冲**移出**帧池
+            //   （`ready.take()`），模拟线程此后无法回收或改写它；它只属于渲染线程，直到
+            //   `end_frame` 之后才 drop。所以直传的源在整帧绘制期间都有效。
             gl::TexSubImage2D(
                 gl::TEXTURE_2D,
                 0,
@@ -374,6 +612,10 @@ impl GamePass {
                 gl::UNSIGNED_BYTE,
                 xrgb8888.as_ptr() as *const std::ffi::c_void,
             );
+            // ★ Mali 稳健（PS1 闪屏）：同帧从客户端内存上传的纹理，强制驱动立刻把数据拷进
+            // 驻留显存，避免 tiler 把这个拷贝延迟到游戏 quad 采样之后才做（那会让采样读到
+            // 未就绪/回收的内存 ⇒ 偶发整片黑）。flush 让上传命令在绘制前完成。
+            gl::Flush();
         }
     }
 
@@ -415,6 +657,13 @@ impl Drop for GamePass {
         unsafe {
             gl::DeleteTextures(1, &self.game_gba);
             gl::DeleteTextures(1, &self.game_gb);
+            gl::DeleteTextures(1, &self.game_sfc);
+            gl::DeleteTextures(1, &self.game_fc);
+            gl::DeleteTextures(1, &self.game_neogeo);
+            gl::DeleteTextures(1, &self.game_arcade);
+            gl::DeleteTextures(1, &self.game_md);
+            gl::DeleteTextures(1, &self.game_ps1);
+            gl::DeleteTextures(1, &self.game_pce);
             gl::DeleteTextures(1, &self.mask);
             gl::DeleteTextures(1, &self.pal);
             gl::DeleteTextures(1, &self.pix);

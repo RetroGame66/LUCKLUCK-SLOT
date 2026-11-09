@@ -89,5 +89,7 @@ pub trait Platform: Send {
 pub trait LidPolicy {
     fn on_close(&mut self);
     fn on_open(&mut self);
-    fn timeout(&self) -> Duration;
+    /// How long a shut lid waits before the machine stops, or `None` when the timer is off and
+    /// the lid only darkens the panel.
+    fn timeout(&self) -> Option<Duration>;
 }

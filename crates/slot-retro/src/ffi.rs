@@ -153,6 +153,14 @@ pub struct Api {
     pub load_game: unsafe extern "C" fn(*const GameInfo) -> bool,
     pub unload_game: unsafe extern "C" fn(),
     pub run: unsafe extern "C" fn(),
+    /// ★ 2026-10-21：`retro_reset` — 把核心拨回**开机那一刻**。libretro 规定它是**必需**导出
+    ///   （和 `retro_run` / `retro_load_game` 一档，不像 `retro_cheat_set` 那样可选），所以
+    ///   这里用 `get!` 硬失败，借它当"这是个合规核心"的又一个证据。
+    ///
+    ///   它复位的是**核心自己的机器状态**：CPU 回到复位向量、内存清成开机值、BIOS 重新走一遍
+    ///   ——**不重读 ROM、不重开会话、不动 SRAM 和即时存档文件**。这正是游戏菜单里「重开本局」
+    ///   要的那一下，见 `App::restart_game`。
+    pub reset: unsafe extern "C" fn(),
     pub serialize_size: unsafe extern "C" fn() -> usize,
     pub serialize: unsafe extern "C" fn(*mut c_void, usize) -> bool,
     pub unserialize: unsafe extern "C" fn(*const c_void, usize) -> bool,
@@ -193,6 +201,7 @@ impl Api {
             load_game: get!("retro_load_game"),
             unload_game: get!("retro_unload_game"),
             run: get!("retro_run"),
+            reset: get!("retro_reset"),
             serialize_size: get!("retro_serialize_size"),
             serialize: get!("retro_serialize"),
             unserialize: get!("retro_unserialize"),

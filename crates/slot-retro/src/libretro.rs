@@ -7,12 +7,43 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use libloading::Library;
 
-use crate::core::{AvInfo, ButtonMask, CoreError, RetroCore, GBA_H, GBA_W};
+use crate::core::{AvInfo, ButtonMask, CoreError, RetroCore, MAX_FRAME_H, MAX_FRAME_W};
 use crate::ffi::*;
 use crate::link::Link;
 use crate::rumble::Rumble;
 
-const VIDEO_BYTES: usize = (GBA_W * GBA_H * 4) as usize;
+/// The host's frame buffer, allocated once at the largest frame any machine this panel will
+/// ever run hands back (`MAX_FRAME_*`), not at the GBA's size. It used to be exactly
+/// `GBA_W * GBA_H * 4`, and that is why `video_refresh` clamped — a bigger frame had nowhere
+/// to land. Allocating at the upper bound is what lets the clamp go.
+const VIDEO_BYTES: usize = (MAX_FRAME_W * MAX_FRAME_H * 4) as usize;
+
+/// ★ 2026-10-27：**这台机器能回答几个手柄口。**
+///
+/// 四个 —— 是这些机种里最多的那一档（SFC / PCE 的 multitap），也正好是热点联机的编址：
+/// port 0 = 本机，port 1..3 = 主机与其他副机（见 `slot-联机模式-分机种方案-2026-10-27.md`）。
+///
+/// 在这之前 `input_state` 只答 port 0、其余一律返回 0，所以"第二个玩家"在核心眼里从来不存在。
+pub const PORTS: usize = 4;
+
+/// ★★ 2026-11-09：**超过这个大小的 rom 不读进内存，只把路径交给核心。**
+///
+/// 起因是玩家反馈「部分 PS1 加载不了」。查到的一条硬事实是：`load()` 一直用 `fs::read`
+/// 把**整个镜像读成一个 `Vec<u8>`**（见 `slot_store::read_rom_named`），而 PS1 的一张盘是
+/// 300–700 MB —— 这台机器只有 **1 GB RAM**（H700 / Mali-G31），前端自己还占着纹理。于是
+/// 大镜像要么 `Vec::with_capacity` 直接 abort，要么把页读进来时被内核 OOM 杀掉：**小盘进得去、
+/// 大盘进不去**，正是"部分"的形状。代价还有一份冤枉的时间：SD 卡上把 700 MB 读一遍（约 20–30 s），
+/// 核心随后又自己把同一个文件读一遍。
+///
+/// **为什么可以不读**：`pcsx_rearmed` 的 `retro_load_game` 只碰 `info->path`
+/// （`CheckCdrom()` / `LoadCdromMainExe(NULL)` / `set_cd_image(info->path)`），
+/// `info->data` 一个字节都没读过（源码 `frontend/libretro.c`，本仓库 `licenses/` 有对应 tar）。
+/// RetroArch 对光盘镜像也是只给路径。
+///
+/// **为什么是 48 MiB 这个阈值**：现有核心里有内存镜像需求的，最大的是 GBA（32 MB 封顶）。
+/// 超过 48 MiB 的文件在支持的机种里只剩光盘镜像（`.bin` / `.iso` / `.chd` / `.pbp` 解出来的
+/// `.iso`），而它们全是路径核心。zip 走解包那条路，不看这个阈值。
+const SLURP_LIMIT: u64 = 48 << 20;
 
 /// A libretro core keeps its emulator in dylib globals, so a second live core would share
 /// the first one's machine.
@@ -37,7 +68,13 @@ struct Host {
     frame_w: u32,
     frame_h: u32,
     audio: Vec<i16>,
-    input: u16,
+    /// 每个手柄口一份按键位图（`PORTS` 个）。0 = 本机，1..3 = 联机时其他玩家。
+    inputs: [u16; PORTS],
+    /// Frames handed over since the cart went in, **including the ones that came with a null
+    /// pointer**. The distinction matters on a device with no console: "black picture" is
+    /// either "the core sent nothing" (this stays zero) or "the core sent frames and the
+    /// upload dropped them", and there is no other way to tell them apart from a card.
+    frames: u64,
     system_dir: CString,
     save_dir: CString,
     rumble: Rumble,
@@ -381,12 +418,47 @@ unsafe extern "C" fn video_refresh(
     height: c_uint,
     pitch: usize,
 ) {
+    with_host(|h| {
+        h.frames += 1;
+        // ★ 2026-10-25 19:40：排查"闪屏"—— 从每 600 帧改到每 30 帧（≈0.5 秒），
+        // 并且给每帧打一个标签：3 个采样点的平均亮度分档。这样能一眼看出
+        // "全亮" / "全暗" / "半亮" 的分布和间隔，不用肉眼读 RGB 三元组。
+        //
+        //   - `avg >= 240`：整屏过亮（可能是隔行、白场、启动过渡）
+        //   - `avg <=  15`：整屏过暗（黑场、CD 读取间隙）
+        //   - 3 点里最大最小差 > 128：画面在几个位置亮度差极大（隔行 / 半画面）
+        // 其余情况只打数字不打标，避免刷屏。
+        // ★ 2026-10-25 23:5x：**连续帧采样**。原来每 30 帧打一条，而 30 是偶数 ——
+        // 如果画面是「逐帧奇偶交替」（隔行的典型症状），每 30 帧采样永远落在同一个
+        // 奇偶相位上，日志里看起来完全稳定，肉眼看却是闪的。改成每 300 帧开一个
+        // 24 帧的连续窗口，才能看出相邻帧到底一不一样。
+        // ★ PS1 闪屏修复后的轻量核验日志（每 30 帧一条）：核交来的帧亮度。
+        // 若仍闪而此处也黑 → 核交黑帧；此处亮但面板黑 → 渲染竞态（应已修）。
+        if h.frames % 30 == 0 && !data.is_null() {
+            let px = |x: usize, y: usize| {
+                let p = (data as *const u8).add(y * pitch + x * 4);
+                [*p, *p.add(1), *p.add(2)]
+            };
+            let (w, hh) = (width as usize, height as usize);
+            let s: u32 = [px(1, 1), px(w / 2, hh / 2), px(w - 2, hh - 2)]
+                .iter()
+                .map(|p| (p[0] + p[1] + p[2]) as u32)
+                .sum();
+            eprintln!("slot: frame {} {}x{} avg={}", h.frames, width, height, s / 9);
+        }
+    });
     if data.is_null() {
         return; // duplicate frame, keep the previous one
     }
     with_host(|h| {
-        let cols = width.min(GBA_W) as usize;
-        let rows = height.min(GBA_H) as usize;
+        // Clamped to the buffer's own upper bound, not to the GBA's frame. This used to read
+        // `width.min(GBA_W)`, which silently cut any frame wider than 240 — a Super Nintendo
+        // lost 6% of its width and 29% of its height, a PlayStation a quarter of its width and
+        // a third of its height, with no error anywhere (see the 2026-10-21 measurement).
+        // Clamping to `MAX_FRAME_*` only guards against a core reporting more than the buffer
+        // was sized for, which no core this panel runs does.
+        let cols = width.min(MAX_FRAME_W) as usize;
+        let rows = height.min(MAX_FRAME_H) as usize;
         // Pack tightly into the destination at the *frame's* width, not the GBA's. A GB/GBC
         // core hands its picture back as 160x144; writing 160 columns but striding on 240
         // leaves an 80-pixel band of stale bytes at the end of every row, which the panel then
@@ -416,10 +488,11 @@ unsafe extern "C" fn video_refresh(
                 }
             }
         }
-        // The size this frame really is, for anything that cuts the buffer by dimension
-        // rather than by the GBA it was allocated at (the thumbnail encoder).
-        h.frame_w = width.min(GBA_W);
-        h.frame_h = height.min(GBA_H);
+        // The size this frame really is — kept honest against the buffer's upper bound, not
+        // against the GBA. Anything that cuts the buffer by dimension (the thumbnail encoder,
+        // `video_xrgb8888`) reads this rather than assuming the machine it was allocated at.
+        h.frame_w = width.min(MAX_FRAME_W);
+        h.frame_h = height.min(MAX_FRAME_H);
     });
 }
 
@@ -440,13 +513,19 @@ unsafe extern "C" fn audio_batch(data: *const i16, frames: usize) -> usize {
 unsafe extern "C" fn input_poll() {}
 
 unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, id: c_uint) -> i16 {
-    if port != 0 || device != DEVICE_JOYPAD {
+    // ★ 2026-10-27：**按口回答**。上层是"多台机器各跑一份同一个 ROM、只交换按键"
+    //   （热点 + 输入锁步），所以核心必须能问出 port 1..3 有没有人按 —— 之前这里写死
+    //   `port != 0` 就 return 0，第二个玩家在核心眼里根本不存在。
+    if device != DEVICE_JOYPAD || port as usize >= PORTS {
         return 0;
     }
-    with_host(|h| match id {
-        JOYPAD_MASK => h.input as i16,
-        _ if id < 16 => ((h.input >> id) & 1) as i16,
-        _ => 0,
+    with_host(|h| {
+        let bits = h.inputs[port as usize];
+        match id {
+            JOYPAD_MASK => bits as i16,
+            _ if id < 16 => ((bits >> id) & 1) as i16,
+            _ => 0,
+        }
     })
     .unwrap_or(0)
 }
@@ -461,6 +540,15 @@ pub struct LibretroCore {
     /// mGBA reads the rom in place, so these bytes must outlive the loaded game.
     rom: Vec<u8>,
     rom_path: Option<CString>,
+    /// ★ 2026-10-24：一段**解包出来的** rom 落在磁盘上的位置。
+    ///
+    /// `rom_path` 指向它，`rom` 仍然带着同样的字节 —— 两个都给。理由见 `load`：fceumm 是这一
+    /// 套里唯一拒绝"只有内存"的核心，而给它一个带对扩展名的真文件是代价最小、兼容面最大的
+    /// 做法。核心一卸载就删掉，`/tmp` 本来也是 tmpfs，重启不留痕。
+    temp_rom: Option<std::path::PathBuf>,
+    /// Whether this core opens a `.zip` itself, so a zipped rom is handed over whole rather
+    /// than unpacked. True for FBNeo and only FBNeo; see [`slot_store::read_rom`].
+    reads_zip_natively: bool,
     av: AvInfo,
     loaded: bool,
     _lib: Library,
@@ -476,7 +564,7 @@ impl LibretroCore {
     /// content root to point at, which is every test and nothing else.
     pub fn open(dylib: &Path) -> Result<Self, CoreError> {
         let dir = dylib.parent().unwrap_or(Path::new(".")).to_path_buf();
-        Self::open_with(dylib, &dir, &dir, &[])
+        Self::open_with(dylib, &dir, &dir, &[], false)
     }
 
     pub fn open_with(
@@ -484,12 +572,19 @@ impl LibretroCore {
         system_dir: &Path,
         save_dir: &Path,
         initial_options: &[(&str, &str)],
+        reads_zip_natively: bool,
     ) -> Result<Self, CoreError> {
         if LIVE.swap(true, Ordering::SeqCst) {
             return Err(CoreError::Unsupported("a core is already open".into()));
         }
-        Self::open_inner(dylib, system_dir, save_dir, initial_options)
-            .inspect_err(|_| LIVE.store(false, Ordering::SeqCst))
+        Self::open_inner(
+            dylib,
+            system_dir,
+            save_dir,
+            initial_options,
+            reads_zip_natively,
+        )
+        .inspect_err(|_| LIVE.store(false, Ordering::SeqCst))
     }
 
     /// What the core will search for `gba_bios.bin`. Read back from the string actually
@@ -560,6 +655,7 @@ impl LibretroCore {
         system_dir: &Path,
         save_dir: &Path,
         initial_options: &[(&str, &str)],
+        reads_zip_natively: bool,
     ) -> Result<Self, CoreError> {
         let lib = unsafe { Library::new(dylib) }.map_err(|e| CoreError::Load(e.to_string()))?;
         let api = unsafe { Api::load(&lib) }?;
@@ -586,7 +682,8 @@ impl LibretroCore {
             frame_w: 0,
             frame_h: 0,
             audio: Vec::new(),
-            input: 0,
+            inputs: [0; PORTS],
+            frames: 0,
             system_dir: cdir(system_dir)?,
             save_dir: cdir(save_dir)?,
             rumble: Rumble::default(),
@@ -612,6 +709,7 @@ impl LibretroCore {
             host,
             rom: Vec::new(),
             rom_path: None,
+            temp_rom: None,
             av: AvInfo {
                 fps: 0.0,
                 sample_rate: 0.0,
@@ -619,6 +717,7 @@ impl LibretroCore {
                 height: 0,
             },
             loaded: false,
+            reads_zip_natively,
             _lib: lib,
         })
     }
@@ -627,9 +726,36 @@ impl LibretroCore {
         if !self.loaded {
             return;
         }
-        let _a = Active::bind(&mut self.host);
-        unsafe { (self.api.unload_game)() };
+        {
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.unload_game)() };
+        }
         self.loaded = false;
+        self.drop_temp_rom();
+    }
+
+    /// Write the unpacked bytes beside the system temp dir, named as the archive entry was so
+    /// the extension survives — that is what a core uses to pick its loader.
+    ///
+    /// Failure is not an error: a machine with no writable temp is a machine where the core
+    /// gets the memory buffer only, exactly as it did before this existed.
+    fn write_temp_rom(&mut self, inner: &str) -> Option<std::path::PathBuf> {
+        let name = std::path::Path::new(inner)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("rom.bin");
+        let dir = std::env::temp_dir().join("slot-rom");
+        std::fs::create_dir_all(&dir).ok()?;
+        let path = dir.join(name);
+        std::fs::write(&path, &self.rom).ok()?;
+        self.temp_rom = Some(path.clone());
+        Some(path)
+    }
+
+    fn drop_temp_rom(&mut self) {
+        if let Some(p) = self.temp_rom.take() {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }
 
@@ -645,16 +771,74 @@ impl Drop for LibretroCore {
 }
 
 impl RetroCore for LibretroCore {
+    fn reads_zip_natively(&self) -> bool {
+        self.reads_zip_natively
+    }
+
     fn load(&mut self, rom: &Path) -> Result<(), CoreError> {
         self.unload();
-        self.rom = std::fs::read(rom)?;
-        self.rom_path = Some(
-            CString::new(rom.as_os_str().as_encoded_bytes())
-                .map_err(|_| CoreError::Load("rom path contains a nul".into()))?,
+        // A rom stored as a zip is unpacked here, unless this core reads zips itself — which is
+        // FBNeo and only FBNeo, because a zip is its native romset format and one file out of a
+        // romset is not a romset. See `crate::rom`.
+        //
+        // ★★ 2026-10-24：**这里曾经把 `reads_zip_natively` 直接传进 `unpack_zip`** ——
+        // `read_rom` 的第二个参数是「解包吗」，而 `reads_zip_natively` 是「核心自己会解包吗」，
+        // 两个问题方向相反。代价是真机上每一盘 zip 都进不去：
+        //     `slot: load: core refused /mnt/sdcard/Games/GBC/…/C 口袋炸弹人.zip`
+        // 因为压缩包是被**原样**交给 mGBA 的；而 FBNeo 那边反过来，romset 被拆开又交了个压缩包。
+        // 单测全绿是因为它们直接测 `read_rom` 的语义，没有一处测到这个调用点。
+        let zipped = !self.reads_zip_natively && slot_store::is_zip(rom);
+        // ★★ 2026-11-09：**光盘镜像不再整盘读进内存**，只交路径。判据与理由见 `SLURP_LIMIT`。
+        //   不是 zip ⇒ 路径本来就是要交给核心的那份，`self.rom` 留空即为"内容核心自己从盘上读"。
+        let file_len = std::fs::metadata(rom).map(|m| m.len()).unwrap_or(0);
+        let streamed = !zipped && file_len > SLURP_LIMIT;
+        let (bytes, inner) = if streamed {
+            (Vec::new(), None)
+        } else {
+            slot_store::read_rom_named(rom, !self.reads_zip_natively)
+                .map_err(|e| CoreError::Load(e.to_string()))?
+        };
+        self.rom = bytes;
+        // ★★ 2026-10-24（六六）：「**FC 进都进不去**」—— `core refused <rom>.zip`.
+        //
+        //   解包之后本来是把路径置空、只交内存（libretro 里 NULL path 就是"内容在内存里"的
+        //   正规写法，mGBA 和 gpSP 都吃这一套）。**fceumm 不吃**：`retro_load_game` 拿到只有
+        //   `data` 的 `retro_game_info` 就返回 false，一帧都不进。
+        //   ⇒ 解包出来的 rom 同时落一份到磁盘，路径和字节一起交。要文件的核心里有文件可读，
+        //   读内存的核心照旧读 `data`，两边都不吃亏。名字用压缩包里那个（扩展名是核心挑加载
+        //   器用的东西），落在 `std::env::temp_dir()`（设备上是 tmpfs 的 /tmp）。
+        self.drop_temp_rom();
+        self.rom_path = match () {
+            _ if self.reads_zip_natively || !zipped => Some(
+                CString::new(rom.as_os_str().as_encoded_bytes())
+                    .map_err(|_| CoreError::Load("rom path contains a nul".into()))?,
+            ),
+            // An archive the frontend unpacked: a real file, named as its entry was.
+            _ => self
+                .write_temp_rom(inner.as_deref().unwrap_or("rom.bin"))
+                .map(|p| {
+                    CString::new(p.as_os_str().as_encoded_bytes())
+                        .map_err(|_| CoreError::Load("rom path contains a nul".into()))
+                })
+                .transpose()?,
+        };
+        eprintln!(
+            "slot: load {} ({} bytes, path {}){}",
+            rom.display(),
+            if streamed { file_len as usize } else { self.rom.len() },
+            if self.rom_path.is_some() { "given" } else { "none" },
+            if streamed { " [streamed: not in RAM]" } else { "" }
         );
         let info = GameInfo {
             path: self.rom_path.as_ref().map_or(ptr::null(), |p| p.as_ptr()),
-            data: self.rom.as_ptr() as *const c_void,
+            // 没有内存镜像时必须是 `null`：一个空 `Vec` 的 `as_ptr()` 是个对齐的悬垂指针，
+            // 核心若只看 `size` 不看 `data` 就会拿它当缓冲区。（`size` 同时也给 0 ——
+            // "没有数据"这一对要说一致，别让核心读到一半。）
+            data: if self.rom.is_empty() {
+                ptr::null()
+            } else {
+                self.rom.as_ptr() as *const c_void
+            },
             size: self.rom.len(),
             meta: ptr::null(),
         };
@@ -676,21 +860,67 @@ impl RetroCore for LibretroCore {
             width: 0,
             height: 0,
         };
-        unsafe { (self.api.set_controller_port_device)(0, DEVICE_JOYPAD) };
+        // ★ 2026-10-25 19:45：把 geometry 也打出来——排查 PS1 闪屏时用。
+        // libretro 的 GameGeometry 只有 base_*（原始分辨率）和 max_*（上限），
+        // 实际帧尺寸在 video_refresh 的 width/height 参数里报。这里打印 base 和
+        // aspect_ratio 就能看出核心是不是把它自己当 480i 在跑（base_width=640）。
+        eprintln!(
+            "slot: av_info: fps {:.2} sample_rate {:.0} base {}x{} max {}x{} aspect {:.3}",
+            av.timing.fps,
+            av.timing.sample_rate,
+            av.geometry.base_width,
+            av.geometry.base_height,
+            av.geometry.max_width,
+            av.geometry.max_height,
+            av.geometry.aspect_ratio,
+        );
+        // ★ 2026-10-27：**四个口都要声明**。有些核心靠这一句决定要不要开 multitap /
+        //   第二个手柄；只声明 port 0 的话，port 1 它根本不会来问。
+        for port in 0..PORTS as c_uint {
+            unsafe { (self.api.set_controller_port_device)(port, DEVICE_JOYPAD) };
+        }
         Ok(())
+    }
+
+    /// ★ 2026-10-27：给某个口喂一份按键位图。port 0 = 本机（每帧由 `run_frame` 覆盖），
+    /// 1..3 留给联机的其他玩家 —— 先把通道铺好，输入锁步那一步直接往上接。
+    fn set_port_input(&mut self, port: usize, mask: ButtonMask) {
+        if port < PORTS {
+            self.host.inputs[port] = mask.0;
+        }
     }
 
     fn run_frame(&mut self, input: ButtonMask) {
         if !self.loaded {
             return;
         }
-        self.host.input = input.0;
+        self.host.inputs[0] = input.0;
         let _a = Active::bind(&mut self.host);
         unsafe { (self.api.run)() };
     }
 
     fn video_xrgb8888(&self) -> &[u8] {
-        &self.host.video
+        // The frame the core last handed back, cut to its own dimensions — not the whole
+        // upper-bound buffer. Downstream (`Frames`, the thumbnail encoder, the game pass's
+        // `upload`) all think in terms of one machine's frame, so handing back a 1024x576
+        // allocation for a 240x160 GBA would be bytes nobody asked for. Before the first frame
+        // arrives the dimensions are zero and this is empty, which is what "no picture yet"
+        // means to everything that reads it.
+        let (w, h) = (self.host.frame_w as usize, self.host.frame_h as usize);
+        let n = w * h * 4;
+        &self.host.video[..n.min(self.host.video.len())]
+    }
+
+    /// `retro_reset` — the machine goes back to the moment it was switched on, without the ROM
+    /// being reloaded: SRAM and state files are files, and this call touches neither. Binds the
+    /// `Active` guard like every other core entry point, so a callback the core makes from
+    /// inside the reset lands on this core's host state and not another's.
+    fn reset(&mut self) {
+        if !self.loaded {
+            return;
+        }
+        let _a = Active::bind(&mut self.host);
+        unsafe { (self.api.reset)() };
     }
 
     fn take_audio(&mut self) -> Vec<i16> {
@@ -821,7 +1051,8 @@ mod tests {
             frame_w: 0,
             frame_h: 0,
             audio: Vec::new(),
-            input: 0,
+            inputs: [0; PORTS],
+            frames: 0,
             system_dir: CString::new(".").unwrap(),
             save_dir: CString::new(".").unwrap(),
             rumble: Rumble::default(),
@@ -851,6 +1082,30 @@ mod tests {
         assert!(ok);
         let value = unsafe { CStr::from_ptr(var.value) };
         assert_eq!(value.to_str().unwrap(), "rfu");
+    }
+
+    /// ★ 2026-10-27：**每个口各答各的**。热点联机时 port 1..3 就是别的玩家，
+    /// 之前这里一律答 0（`port != 0` 直接返回），第二个玩家在核心眼里不存在。
+    #[test]
+    fn each_port_answers_with_its_own_pad() {
+        let mut host = host_with(HashMap::new(), false);
+        host.inputs[0] = 0b0000_0001; // B
+        host.inputs[1] = 0b0000_0100; // bit1
+        let _active = Active::bind(&mut host);
+
+        unsafe {
+            // 整张位图（JOYPAD_MASK）
+            assert_eq!(input_state(0, DEVICE_JOYPAD, 0, JOYPAD_MASK), 1);
+            assert_eq!(input_state(1, DEVICE_JOYPAD, 0, JOYPAD_MASK), 4);
+            assert_eq!(input_state(2, DEVICE_JOYPAD, 0, JOYPAD_MASK), 0);
+            // 单个键（id = 位号），两个口互不串
+            assert_eq!(input_state(0, DEVICE_JOYPAD, 0, 0), 1);
+            assert_eq!(input_state(1, DEVICE_JOYPAD, 0, 0), 0);
+            assert_eq!(input_state(1, DEVICE_JOYPAD, 0, 2), 1);
+            // 越界的口与别的设备类型：答 0，不许 panic
+            assert_eq!(input_state(PORTS as c_uint, DEVICE_JOYPAD, 0, JOYPAD_MASK), 0);
+            assert_eq!(input_state(0, 0, 0, JOYPAD_MASK), 0);
+        }
     }
 
     #[test]

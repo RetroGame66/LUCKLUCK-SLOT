@@ -34,7 +34,7 @@ fn game_pass_multiplies_every_output_cell_by_the_lcd3x_mask() {
     };
     let grey = vec![0x80u8; (SRC_W * SRC_H * 4) as usize];
     c.begin_frame();
-    c.upload_game(&grey);
+    c.upload_game(&grey, SRC_W, SRC_H);
     c.draw_game();
     let frame = c.read_frame();
 
@@ -62,7 +62,7 @@ fn the_game_frame_keeps_its_orientation_from_upload_to_readback() {
     let mut src = vec![0u8; (SRC_W * SRC_H * 4) as usize];
     src[0..3].copy_from_slice(&[255, 255, 255]);
     c.begin_frame();
-    c.upload_game(&src);
+    c.upload_game(&src, SRC_W, SRC_H);
     c.draw_game();
     let frame = c.read_frame();
 
@@ -99,7 +99,7 @@ fn the_picture_strikes_as_a_band_at_the_centre_before_it_fills_the_frame() {
     let peak = |c: &mut Compositor, t: f32| {
         c.set_screen_power(t);
         c.begin_frame();
-        c.upload_game(&grey);
+        c.upload_game(&grey, SRC_W, SRC_H);
         c.draw_game();
         let frame = c.read_frame();
         let brightest = frame.chunks_exact(4).map(|p| p[0]).max().unwrap_or(0);
@@ -146,7 +146,7 @@ fn the_game_marker_draws_the_picture_where_it_sits_in_the_list() {
     c.set_screen_power(1.0);
 
     c.begin_frame();
-    c.upload_game(&white);
+    c.upload_game(&white, SRC_W, SRC_H);
     c.draw_list(&[full([1.0, 0.0, 0.0, 1.0]), Draw::Game]);
     let under = c.read_frame();
     let blue = under.chunks_exact(4).map(|p| p[2]).max().unwrap_or(0);

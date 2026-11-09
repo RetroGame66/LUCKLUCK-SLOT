@@ -42,6 +42,54 @@ const REFLECT_GAIN: f32 = 0.75;
 /// the same starting point the game pass uses.
 const IDENTITY_COL: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 
+/// One frame's account of the screen reflection, surfaced for debugging (see
+/// `Compositor::reflect_diag`). Filled every time `draw_reflection` runs — whether or not it
+/// actually drew — so a missing reflection can be told apart from a never-reflective overlay:
+/// `drew == false` with `mask_present == true` is a *skip* (the bug to chase), while
+/// `mask_present == false` is the overlay simply not asking for one.
+#[derive(Clone, Copy)]
+pub struct ReflectDiag {
+    /// The machine whose frame the reflection would mirror — the compositor's active system.
+    pub sys: System,
+    /// Whether the reflection quad was actually drawn this frame.
+    pub drew: bool,
+    /// Why it was skipped, when `drew` is false. `None` means it drew.
+    pub skip: Option<&'static str>,
+    /// The window the reflection is positioned in — the machine's pillarboxed rect on the panel
+    /// (e.g. SFC is centred 512×448 with ~104px side bars). A change here mid-session is a
+    /// geometry shift worth seeing.
+    pub win: (f32, f32, f32, f32),
+    /// The blur target's size — the frame's own shape. Rebuilt when the core switches
+    /// resolution (SFC interlace 256×224 ↔ 512×448), so this jumping around is the usual
+    /// "occasionally" trigger.
+    pub blur: (u32, u32),
+    /// The game frame's own size the reflection blurs — `System::src_w/h()` for a fixed
+    /// machine, or whatever the core handed over for SFC/PS1. A change here mid-session is
+    /// the actual resolution switch; `win` jumps with it and the reflection band shifts off
+    /// the fixed overlay, which reads as the left side dropping out.
+    pub src: (u32, u32),
+    /// Whether a reflective overlay was up (`overlay_reflects`).
+    pub mask_present: bool,
+    /// Whether that overlay's texture was actually in the sprite pool when drawn. A not-yet-
+    /// uploaded overlay is the most common "occasionally missing" cause.
+    pub mask_resolved: bool,
+}
+
+impl Default for ReflectDiag {
+    fn default() -> Self {
+        Self {
+            sys: System::Gba,
+            drew: false,
+            skip: None,
+            win: (0.0, 0.0, 0.0, 0.0),
+            blur: (0, 0),
+            src: (0, 0),
+            mask_present: false,
+            mask_resolved: false,
+        }
+    }
+}
+
 pub struct Compositor {
     fbo: gl::types::GLuint,
     tex: gl::types::GLuint,
@@ -79,17 +127,23 @@ pub struct Compositor {
     /// lookup as `u_refl_pal_on` — which is what the compiler was complaining about.
     u_refl_pal_on: gl::types::GLint,
     /// The small, blurred copy of the game frame the reflection samples, and the target it is
-    /// rendered into. Fixed for the life of the compositor: only GB/GBC have a letterbox, and
-    /// both hand over the same 160×144 frame.
+    /// rendered into.
     blur_prog: gl::types::GLuint,
     u_blur_tex: gl::types::GLint,
     u_blur_step: gl::types::GLint,
     u_blur_rect: gl::types::GLint,
     blur_fbo: gl::types::GLuint,
     blur_tex: gl::types::GLuint,
+    /// The blur target's size, which has to carry the frame's own shape: the target is filled
+    /// by sampling the frame in normalised coordinates, so a target of another aspect squashes
+    /// the glow. Rebuilt when the machine changes — see `resize_blur`.
+    blur_size: (u32, u32),
     /// Non-fatal startup notes — today, only why the reflection was left off. A device with no
     /// console has nowhere to print these, so `device_app` writes them to the card.
     warnings: Vec<String>,
+    /// Last frame's reflection state, for debugging. Set every `draw_reflection` call, read by
+    /// `reflect_diag`. See `ReflectDiag`.
+    reflect_diag: ReflectDiag,
 }
 
 impl Compositor {
@@ -231,6 +285,7 @@ impl Compositor {
                 applied_cc_gamma: None,
                 reflect_mask: None,
                 reflect_prog,
+                reflect_diag: ReflectDiag::default(),
                 u_refl_blur,
                 u_refl_win,
                 u_refl_rect,
@@ -244,6 +299,7 @@ impl Compositor {
                 u_blur_rect,
                 blur_fbo,
                 blur_tex,
+                blur_size: (bw, bh),
                 warnings,
             })
         }
@@ -254,10 +310,87 @@ impl Compositor {
     /// goes in or the shelf changes machine — never per frame.
     pub fn set_system(&mut self, system: System) {
         self.game.set_system(system);
+        // Arcade's frame size is not known until a board is in the slot, so its blur target is
+        // sized on the first upload (see `upload_game`) rather than here. Every fixed machine
+        // is sized from its `System`, as it always was.
+        if system == System::Arcade {
+            return;
+        }
+        // ★ 2026-10-22: the reflection's blur target has to carry the frame's own shape, so it
+        // is rebuilt for the machine that is up. A 160x144 target and a 256x224 frame are not
+        // the same picture, and the glow is sampled in normalised coordinates — a target of
+        // another aspect shows it squashed (2.8% of stretch on the consoles, which is small
+        // but is the difference between the reflection and the screen agreeing). Cheap: this
+        // runs every frame and does nothing unless the size actually changed.
+        self.resize_blur(system.src_w() / REFLECT_DIV, system.src_h() / REFLECT_DIV);
     }
 
-    pub fn upload_game(&mut self, xrgb8888: &[u8]) {
-        self.game.upload(xrgb8888);
+    /// Rebuild the reflection's blur target at a new size and point the blur program at it.
+    ///
+    /// The target holds a blurred copy of the frame the machine hands over, filled by
+    /// sampling that frame in normalised coordinates, so the target's shape *is* the frame's
+    /// shape. It is rebuilt rather than allocated once at the largest size because the target
+    /// is also the resolution the glow is drawn at, and a Game Boy's reflection should stay
+    /// as fine as it always was.
+    ///
+    /// A target the driver will not give us leaves the reflection off, exactly as it does at
+    /// startup: the handles go to zero, `draw_reflection` skips, and the picture comes up the
+    /// way it always did.
+    fn resize_blur(&mut self, w: u32, h: u32) {
+        if (w, h) == self.blur_size {
+            return;
+        }
+        unsafe {
+            if self.blur_tex != 0 {
+                gl::DeleteTextures(1, &self.blur_tex);
+            }
+            if self.blur_fbo != 0 {
+                gl::DeleteFramebuffers(1, &self.blur_fbo);
+            }
+            let tex = crate::gl::texture(w, h, gl::LINEAR, gl::CLAMP_TO_EDGE, gl::RGBA, None);
+            let mut fbo = 0;
+            gl::GenFramebuffers(1, &mut fbo);
+            gl::BindFramebuffer(gl::FRAMEBUFFER, fbo);
+            gl::FramebufferTexture2D(
+                gl::FRAMEBUFFER,
+                gl::COLOR_ATTACHMENT0,
+                gl::TEXTURE_2D,
+                tex,
+                0,
+            );
+            let status = gl::CheckFramebufferStatus(gl::FRAMEBUFFER);
+            gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+            if status != gl::FRAMEBUFFER_COMPLETE {
+                gl::DeleteFramebuffers(1, &fbo);
+                gl::DeleteTextures(1, &tex);
+                self.blur_fbo = 0;
+                self.blur_tex = 0;
+                self.blur_size = (w, h);
+                return;
+            }
+            self.blur_tex = tex;
+            self.blur_fbo = fbo;
+            self.blur_size = (w, h);
+            // The blur program's own copy of the target's size — the vertex stage positions
+            // the quad with it.
+            if self.blur_prog != 0 {
+                gl::UseProgram(self.blur_prog);
+                gl::Uniform2f(
+                    crate::gl::uniform_location(self.blur_prog, "u_target"),
+                    w as f32,
+                    h as f32,
+                );
+            }
+        }
+    }
+
+    pub fn upload_game(&mut self, xrgb8888: &[u8], w: u32, h: u32) {
+        self.game.upload(xrgb8888, w, h);
+        // The glow blurs the frame into a target shaped like the frame itself. For a fixed
+        // machine `set_system` already sized it and this is a no-op; for an arcade board the
+        // frame's size is only known here, so this is what sizes (and re-sizes, per cart) the
+        // reflection's target. Cheap enough per frame, and it is a comparison when unchanged.
+        self.resize_blur(w / REFLECT_DIV, h / REFLECT_DIV);
     }
 
     /// The panel mask, as nine RGB triples in row-major order. See `GamePass::set_mask` for
@@ -326,6 +459,12 @@ impl Compositor {
         self.game.set_grid(colour, mix, scanline);
     }
 
+    /// 扫描线的行间距，同样只打给 game pass
+    /// （1 = 每行，2 = 隔一行）。
+    pub fn set_grid_step(&mut self, step: u32) {
+        self.game.set_grid_step(step);
+    }
+
     /// 色彩校正的 gamma，随矩阵一起每帧推。1.0 = 编码空间直乘；2.2 = 线性空间做校正。
     pub fn set_cc_gamma(&mut self, g: f32) {
         if self.applied_cc_gamma == Some(g) {
@@ -352,30 +491,65 @@ impl Compositor {
         &self.warnings
     }
 
+    /// One frame's account of the screen reflection, for debugging. Filled every
+    /// `draw_reflection` call (drawn or skipped); the frontend logs it — gated to SFC and only
+    /// on change — to chase the "reflection left side occasionally missing" report.
+    pub fn reflect_diag(&self) -> ReflectDiag {
+        self.reflect_diag
+    }
+
     /// The screen glow, for a glowing overlay: the game frame blurred, its own edge carried
     /// straight out past the picture's window, faded with distance — and shown only where the
     /// overlay's own alpha leaves a hole. Two cheap draws: a 3×3 average of the frame into a
     /// half-size texture, then one full-panel quad that samples it. Nothing here reads a
     /// previous frame, so it can neither lag nor fall out of step with the picture.
     fn draw_reflection(&mut self) {
+        // ★ Debug (2026-10-29): record every call, drawn or skipped, so the SFC "reflection
+        // left side occasionally missing" report can be told apart from a never-reflective
+        // overlay. Read by `reflect_diag`; the frontend logs it only on change.
+        let sys = self.game.active();
+        let mask_present = self.reflect_mask.is_some();
+        let mut diag = ReflectDiag {
+            sys,
+            drew: false,
+            skip: None,
+            win: (0.0, 0.0, 0.0, 0.0),
+            blur: self.blur_size,
+            src: (0, 0),
+            mask_present,
+            mask_resolved: false,
+        };
         // Built only if the device's GL took the programs and the blur target. A driver that
         // refused any of them leaves the reflection off; see `Compositor::new`.
         if self.reflect_prog == 0 || self.blur_prog == 0 || self.blur_fbo == 0 {
+            diag.skip = Some("no_program_or_blur_target");
+            self.reflect_diag = diag;
             return;
         }
         let Some(mask_id) = self.reflect_mask else {
+            diag.skip = Some("no_reflect_mask");
+            self.reflect_diag = diag;
             return;
         };
         let Some(mask_tex) = self.sprites.source(mask_id) else {
+            diag.skip = Some("mask_texture_not_resolved");
+            self.reflect_diag = diag;
             return;
         };
+        diag.mask_resolved = true;
         let game_tex = self.game.active_texture();
         let (wx, wy, ww, wh) = self.game.source_rect();
         if ww <= 1.0 || wh <= 1.0 {
+            diag.skip = Some("source_rect_too_small");
+            self.reflect_diag = diag;
             return;
         }
+        diag.win = (wx, wy, ww, wh);
         let (sw, sh) = self.game.source_size();
-        let (bw, bh) = (GB_SRC_W / REFLECT_DIV, GB_SRC_H / REFLECT_DIV);
+        diag.src = (sw, sh);
+        // The blur target's own size, not the source's: the target is what the blur is
+        // rendered into, and it is sized to the machine that is up (see `resize_blur`).
+        let (bw, bh) = self.blur_size;
         unsafe {
             // 1. The blur: a 3×3 box average of the frame into the small texture.
             gl::BindFramebuffer(gl::FRAMEBUFFER, self.blur_fbo);
@@ -406,6 +580,10 @@ impl Compositor {
             self.quad.draw();
             gl::Disable(gl::BLEND);
         }
+        // Drew successfully: clear the skip reason and publish the state.
+        diag.drew = true;
+        diag.skip = None;
+        self.reflect_diag = diag;
     }
 
     pub fn draw_game(&mut self) {
@@ -416,11 +594,35 @@ impl Compositor {
     /// them. The split is what lets the picture come up over a seated cart and stay under the
     /// HUD, and what puts the glow over the overlay art rather than under it.
     pub fn draw_list(&mut self, items: &[Draw]) {
+        // PS1 闪屏根因（2026-10-26）：游戏 quad 直接画进合成 FBO、且采样**当帧刚从客户端内存
+        // 上传的纹理**，Mali 的 tiler 会偶发把这一批 game.draw 的片元整批丢掉 —— 核稳定交亮帧、
+        // 辉光（只采样同一张纹理）正常、唯独游戏 quad 整片黑，正是这个时序窗口。GBA 帧小、
+        // 不踩这个窗口所以不闪。
+        //
+        // 两点修复：① `upload` 末尾 `glFlush()` 强制驱动把客户端内存立刻拷进驻留显存，不让
+        // 拷贝延迟到游戏 quad 采样之后；② 下面 `Draw::Game` 画之前把全部 GL 状态彻底复位、
+        // 显式绑回合成 FBO 与全屏 viewport，不给 tiler 留任何歧义状态。空切片守卫（`from < i`）
+        // 只是顺带的安全网，不是主因。
         let mut from = 0;
         for (i, item) in items.iter().enumerate() {
             match *item {
                 Draw::Game => {
-                    self.sprites.draw(&items[from..i], &self.quad);
+                    if from < i {
+                        self.sprites.draw(&items[from..i], &self.quad);
+                    }
+                    // ★ Mali 稳健（PS1 闪屏）：游戏 quad 直接画进合成 FBO、采样当帧刚上传的
+                    // 纹理，Mali tiler 偶发整批丢片元（GBA 不踩这个窗口）。画之前把所有可能
+                    // 残留的 GL 状态彻底复位、显式绑回合成 FBO 与全屏 viewport，不给 tiler 留
+                    // 任何歧义状态。
+                    unsafe {
+                        gl::BindFramebuffer(gl::FRAMEBUFFER, self.fbo);
+                        gl::Viewport(0, 0, OUT_W as i32, OUT_H as i32);
+                        gl::Disable(gl::BLEND);
+                        gl::Disable(gl::DEPTH_TEST);
+                        gl::Disable(gl::SCISSOR_TEST);
+                        gl::Disable(gl::CULL_FACE);
+                        gl::Disable(gl::STENCIL_TEST);
+                    }
                     self.game.draw(&self.quad);
                 }
                 // The glow goes **after** the art it glows past, not before. It used to be
@@ -432,11 +634,15 @@ impl Compositor {
                 // art is also simply where the light is: the art is the plastic's own colour,
                 // and this is light falling on that plastic.
                 Draw::Glow => {
-                    self.sprites.draw(&items[from..i], &self.quad);
+                    if from < i {
+                        self.sprites.draw(&items[from..i], &self.quad);
+                    }
                     self.draw_reflection();
                 }
                 Draw::Shot { tex } => {
-                    self.sprites.draw(&items[from..i], &self.quad);
+                    if from < i {
+                        self.sprites.draw(&items[from..i], &self.quad);
+                    }
                     // A shot naming a texture nobody made draws nothing, as a sprite does.
                     if let Some(tex) = self.sprites.source(tex) {
                         self.game.draw_still(tex, &self.quad);
@@ -446,7 +652,9 @@ impl Compositor {
             }
             from = i + 1;
         }
-        self.sprites.draw(&items[from..], &self.quad);
+        if from < items.len() {
+            self.sprites.draw(&items[from..], &self.quad);
+        }
     }
 
     pub fn create_texture(&mut self, w: u32, h: u32, rgba: &[u8]) -> TexId {
@@ -486,7 +694,7 @@ impl Compositor {
     }
 
     /// The offscreen target, top row first. glReadPixels hands back the framebuffer in
-    /// memory order, which is bottom up.
+    /// memory order, which is bottom up. Used by the render tests and by ad-hoc screenshots.
     pub fn read_frame(&self) -> Vec<u8> {
         let stride = OUT_W as usize * 4;
         let mut buf = vec![0u8; stride * OUT_H as usize];

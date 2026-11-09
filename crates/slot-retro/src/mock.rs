@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use crate::core::{AvInfo, ButtonMask, CoreError, RetroCore, GBA_H, GBA_W};
 
@@ -15,11 +16,21 @@ fn samples_at(frame: u64) -> u64 {
     (frame as f64 * SAMPLE_RATE / FPS) as u64
 }
 
+/// The codes a `MockCore` was handed through `RetroCore::set_cheat`, in the order they arrived,
+/// each with the `enabled` flag it was called with. Live in a shared cell so a test can read them
+/// off a core the emulator worker owns.
+pub type CheatLog = Arc<Mutex<Vec<(bool, String)>>>;
+
 pub struct MockCore {
     frame: u64,
     video: Vec<u8>,
     audio: Vec<i16>,
     sram: Option<Vec<u8>>,
+    /// Every `set_cheat` call, and how many `cheat_reset`s came before it. The reset count is
+    /// separate from the log because the two together are what the frontend's push protocol
+    /// promises: one clear, then the live codes only.
+    cheats: CheatLog,
+    cheat_resets: Arc<Mutex<usize>>,
 }
 
 impl Default for MockCore {
@@ -35,9 +46,26 @@ impl MockCore {
             video: vec![0; (GBA_W * GBA_H * 4) as usize],
             audio: Vec::new(),
             sram: None,
+            cheats: Arc::new(Mutex::new(Vec::new())),
+            cheat_resets: Arc::new(Mutex::new(0)),
         };
         c.render();
         c
+    }
+
+    /// The codes this core received, in arrival order, as `(enabled, code)`.
+    ///
+    /// Note the shape a real core gives these: mGBA's `retro_cheat_set` ignores the `enabled`
+    /// argument (`UNUSED(enabled)` in libretro/mgba's source) and applies every code it is
+    /// handed, so what matters for whether a code is live is **whether it was sent at all**.
+    /// The frontend filters before sending; this log is how a test proves it did.
+    pub fn cheats(&self) -> Vec<(bool, String)> {
+        self.cheats.lock().expect("cheats").clone()
+    }
+
+    /// How many times the core was told to clear its cheat table.
+    pub fn cheat_resets(&self) -> usize {
+        *self.cheat_resets.lock().expect("cheat resets")
     }
 
     /// Purely a function of the frame counter, so `unserialize` can regenerate the exact
@@ -135,5 +163,17 @@ impl RetroCore for MockCore {
             width: GBA_W,
             height: GBA_H,
         }
+    }
+
+    fn set_cheat(&self, _index: u32, enabled: bool, code: &str) {
+        self.cheats
+            .lock()
+            .expect("cheats")
+            .push((enabled, code.to_string()));
+    }
+
+    fn cheat_reset(&self) {
+        *self.cheat_resets.lock().expect("cheat resets") += 1;
+        self.cheats.lock().expect("cheats").clear();
     }
 }

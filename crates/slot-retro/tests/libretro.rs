@@ -31,7 +31,7 @@ fn core_with_bios() -> Option<LibretroCore> {
         return None;
     }
     Some(
-        LibretroCore::open_with(&p, &bios, &bios)
+        LibretroCore::open_with(&p, &bios, &bios, &[])
             .expect("vendored core is present but would not open"),
     )
 }
