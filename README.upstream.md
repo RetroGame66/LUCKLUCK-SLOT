@@ -1,6 +1,6 @@
 # Upstream README
 
-This is the README of [BrandonKowalski/slot](https://github.com/BrandonKowalski/slot) — the
+This is the README of [slot-cfw/slot](https://github.com/slot-cfw/slot) — the
 project this fork is based on — reproduced **verbatim and unmodified** from commit
 [`4345cb8b`](https://github.com/BrandonKowalski/slot/commit/4345cb8bdb), which is the commit this
 fork branched from. (The only difference is a newline at the end of the file, which upstream's copy

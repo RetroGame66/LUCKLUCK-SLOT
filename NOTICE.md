@@ -2,8 +2,10 @@
 
 ## This is a modified fork
 
-This repository is a fork of **[BrandonKowalski/slot](https://github.com/BrandonKowalski/slot)** —
-"a bespoke, GBA-only frontend for the Anbernic RG SP".
+This repository is a fork of **[slot-cfw/slot](https://github.com/slot-cfw/slot)** — "a bespoke,
+GBA-only frontend for the Anbernic RG SP". Upstream was `BrandonKowalski/slot` until November 2026,
+when it moved to the `slot-cfw` organisation; the old URL redirects. The baseline below is a commit
+from the pre-move repository, so its link still uses the old path.
 
 Everything originally in the project — the code, the artwork, the design, the interface's English
 voice — is the work of **Brandon T. Kowalski**. It is used here under the MIT License (see
@@ -16,7 +18,8 @@ unmodified, and introduced as such, at [`README.upstream.md`](README.upstream.md
 
 > **中文说明**
 >
-> 本仓库是 [BrandonKowalski/slot](https://github.com/BrandonKowalski/slot) 的修改版（fork）。
+> 本仓库是 [slot-cfw/slot](https://github.com/slot-cfw/slot) 的修改版（fork）。上游原名
+> `BrandonKowalski/slot`，2026-11 迁到 `slot-cfw` 组织，旧地址会重定向。
 > 原作由 **Brandon T. Kowalski** 开发，采用 MIT 许可；本仓库在其基础上做了修改，
 > 修改部分由 [@RetroGame66](https://github.com/RetroGame66) 完成。
 > 本仓库**不是**上游官方版本，与上游作者、Anbernic，以及 mGBA、gpSP 等第三方项目
