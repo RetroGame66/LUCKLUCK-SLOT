@@ -1,0 +1,19 @@
+[package]
+name = "slot-media"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+slot-store = { path = "../slot-store" }
+symphonia.workspace = true
+# A playlist is a text file, and a text file on a card in this part of the world is written in
+# whatever the ripper's platform defaulted to. `encoding_rs` is here for the GBK fallback only:
+# UTF-8 (with or without a BOM) is decoded by hand above it, because that is the case that has
+# to be right and the case that has a rule.
+encoding_rs = "0.8"
+
+# For the tests only: a lyric lookup is a question about a directory, and answering it needs a
+# directory. Already in the workspace lock through the other crates, so this costs no new build.
+[dev-dependencies]
+tempfile.workspace = true
