@@ -46,6 +46,9 @@ const MARK_INK: [u8; 3] = [0xbd, 0xbd, 0xbd];
 
 /// The game's title, a few words to a line. The dump's bracketed tags are facts about the file
 /// rather than the game, and the chip does not carry them.
+///
+/// **`stem` 换成已经定好的显示名也可以**：`board_face` 传的是 `shown_name` 的结果
+/// （街机是查表得来的中文名），再洗一遍括号不会伤到它 —— 生成表时就剥干净了。
 pub fn rom_marking(stem: &str) -> Vec<String> {
     let mut title: Vec<String> = Vec::new();
     for word in clean_label(stem).to_uppercase().split_whitespace() {
@@ -90,6 +93,11 @@ pub fn board_face(cart: &Cart) -> CartFace {
     // The card's own board, if it supplied one. Its chips are drawn into the art and its lamps
     // are magenta for the code to fill, so none of what follows applies: no shell-coloured
     // placeholders to paint and no ROM line to ink, because the card has already drawn both.
+    //
+    // ★ 2026-10-24（六六）：「只有 GBA 需要换核心啊，其它机种没这个需求」——
+    //   这一面只在选核心时出现，而 `open_core_picker` 只对 GBA 打开，所以
+    //   **一张 `board_gba.png` 就够**，不按机种拆。下面那条 `themed_shell` 仍然要：
+    //   亮色主题下这块板是"同一块板的另一个亮度"，不是另一个机种的板。
     if let Some(art) = crate::cart_art::board_art() {
         return CartFace {
             rgba: art.rgba.clone(),
@@ -97,7 +105,11 @@ pub fn board_face(cart: &Cart) -> CartFace {
             h: art.h,
         };
     }
-    let shell = shell_for(&cart.code);
+    // ★ 2026-10-24：**板面也是这台机器的塑料，跟主题走**。原来直接读 `shell_for`，
+    //   于是亮色模式下卡带正面已经提成 housing 的浅色、翻过来背面还是那块深灰 0x35353a
+    //   —— 在浅底上读作"一块兜底的深色剪影"。`cart_face` 早就走了 `themed_shell`
+    //   （默认壳换 housing、特殊壳只抬明度），背面漏了这一道。
+    let shell = crate::cart::themed_shell(&shell_for(&cart.code));
     // Deepest placeholder first and the wall last, so a shell whose own hex or shade matches
     // a placeholder still further down the list finds nothing left to replace: once a
     // placeholder's `.replace` call has run, its literal text is gone from the SVG.
@@ -112,7 +124,14 @@ pub fn board_face(cart: &Cart) -> CartFace {
         w: BOARD_W,
         h: BOARD_H,
     };
-    over(&mut face, &rom_marking_face(&cart.stem), ROM_X, ROM_Y);
+    // 刻在芯片上的名字与贴纸、标题行是同一个：`shown_name` 是唯一投递口，
+    // 街机在那里换成中文，别的机种原样返回清洗过的文件名。
+    over(
+        &mut face,
+        &rom_marking_face(&slot_store::shown_name(cart.system(), &cart.stem)),
+        ROM_X,
+        ROM_Y,
+    );
     face
 }
 

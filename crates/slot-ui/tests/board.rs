@@ -12,7 +12,9 @@ fn cart(stem: &str, code: &str) -> Cart {
         stem: stem.into(),
         rom: format!("Games/{stem}.gba").into(),
         label: None,
+        art: None,
         code: code.into(),
+        cgb: 0,
         title: stem.to_uppercase(),
     }
 }

@@ -16,7 +16,9 @@ fn render_board() {
         stem: "Pokemon - Emerald Version (USA, Europe)".into(),
         rom: "Games/Emerald.gba".into(),
         label: None,
+        art: None,
         code: "BPEE".into(),
+        cgb: 0,
         title: "POKEMON EMER".into(),
     });
     let f = std::fs::File::create(&out).unwrap();

@@ -258,6 +258,7 @@ impl Polaroids {
             battery_percent,
             bolt,
             out,
+            1.0,
         );
     }
 

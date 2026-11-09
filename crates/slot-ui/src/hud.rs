@@ -31,6 +31,74 @@ pub const PLATE_H: f32 = 40.0;
 /// It is the band's own height rather than a second number, so the two cannot drift apart.
 pub const PLATE_Y: f32 = crate::slot_chrome::TOP_BAND_H;
 
+/// ★ 2026-11-03（六六）：「你要不货架界面的 HUD 宽度缩到 360px 吧，跟插卡位同框可能好看点；
+/// 高度加一点，两边改圆角」→ 同日再改：「放插卡位是不是更自然？反正就是一两秒的事」。
+///
+/// 于是这块板**住进插卡口里**：宽取插口宽、高取插口高（`SLOT_OPEN_H`，720/640 两树都是 44），
+/// 底边压在插口下沿上。它只在电平/提示出来那 1.5 秒存在，盖住的是洞口而不是机壳。
+/// 高度写成插口自己的常量而不是另给一个数，两块东西才不可能漂开。
+/// **全屏相位（游戏里的音量/快进）仍然用 `PLATE_H`，一个像素都没动。**
+pub const SHELF_PLATE_H: f32 = crate::desktop::SLOT_OPEN_H;
+
+/// 窄板两端的圆角半径。取 12 而不是 `h / 2`：胶囊的两端是半圆，上下两条边会弯，
+/// 而这块板的**底边要正对插卡口上沿**，上下两边得是一条直线。
+pub const SHELF_PLATE_R: f32 = 12.0;
+
+/// Where the HUD's plate stands this frame: its box, and how round its two ends are.
+///
+/// ★ 2026-11-03（六六）：这是「板」第一次拥有自己的几何。之前板就是整条 `OUT_W`，
+/// 所以它只需要一个 `top`。货架上要跟插卡位同框（`SLOT_OPEN_X/W`，360 宽），
+/// 于是宽、高、圆角都成了必须告诉它的东西，`top` 一个人不够了。
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub struct Plate {
+    pub x: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Two ends only: 0 is the square full-width plate, `SHELF_PLATE_R` the shelf's.
+    pub radius: f32,
+}
+
+impl Plate {
+    /// The plate every phase but the shelf draws: edge to edge, square, `PLATE_H` tall.
+    pub const fn full() -> Self {
+        Self {
+            x: 0.0,
+            w: OUT_W as f32,
+            h: PLATE_H,
+            radius: 0.0,
+        }
+    }
+
+    /// ★ 2026-11-03（六六）：「宽度缩到 360px，跟插卡位同框；高度加一点，两边改圆角」
+    ///   → 同日：「放插卡位是不是更自然？」。
+    ///
+    /// 宽高都取插口自己的常量（`SLOT_OPEN_W` / `SLOT_OPEN_H`），x 取 `SLOT_OPEN_X`，
+    /// 所以板**就是**那个口，换分辨率也不会各走各的。
+    pub const fn shelf() -> Self {
+        Self {
+            x: crate::desktop::SLOT_OPEN_X,
+            w: crate::desktop::SLOT_OPEN_W,
+            h: SHELF_PLATE_H,
+            radius: SHELF_PLATE_R,
+        }
+    }
+
+    pub fn cx(&self) -> f32 {
+        self.x + self.w * 0.5
+    }
+
+    pub fn right(&self) -> f32 {
+        self.x + self.w
+    }
+
+    /// The narrow plate. The full-width one keeps the layout it has always had — the bar
+    /// centred on the screen, the badge in the corner — so nothing about the in-game readout
+    /// moves because the shelf changed.
+    fn narrow(&self) -> bool {
+        self.w < OUT_W as f32 - 0.5
+    }
+}
+
 pub const HUD_ICON_PX: f32 = 24.0;
 const ICON_GAP: f32 = 10.0;
 
@@ -39,7 +107,6 @@ const BADGE_MARGIN: f32 = 12.0;
 
 const BAR_W: f32 = 320.0;
 const BAR_H: f32 = 6.0;
-const BAR_Y: f32 = (PLATE_H - BAR_H) / 2.0;
 const TRACK: [f32; 4] = [1.0, 1.0, 1.0, 0.18];
 
 /// The bar's fill. The palette's ink rather than a colour of its own, which is what the glyph
@@ -152,7 +219,6 @@ impl Hud {
         self.said = Some((toast, now));
     }
 
-
     pub fn toast_visible(&self, now: Millis) -> bool {
         self.toast_alpha(now) > 0.0
     }
@@ -213,61 +279,78 @@ impl Hud {
     /// the toast and the badge are all laid out *inside* the plate, so moving the plate moves
     /// the whole readout. Callers pass `PLATE_Y` on a screen that has the letter band at the
     /// top and zero on one that does not.
-    pub fn draw(&self, now: Millis, top: f32, out: &mut Vec<Draw>) {
+    pub fn draw(&self, now: Millis, top: f32, plate: Plate, out: &mut Vec<Draw>) {
         let alpha = self.alpha(now);
         let toast = self.toast_alpha(now);
         // The plate belongs to whatever is being read against it, bar or toast. The badge
         // never gets one: fast forward can be latched for minutes, and a full width plate
         // over the game for all of it is a worse trade than the halo it carries.
         if alpha > 0.0 || toast > 0.0 {
-            out.push(Draw::Rect {
-                x: 0.0,
-                y: top,
-                w: OUT_W as f32,
-                h: PLATE_H,
-                colour: faded(crate::palette::plate(), alpha.max(toast)),
-            });
+            // ★ 2026-11-03（六六）：「背景不透明」—— 板住进插卡口之后，0.72 的纱会把洞里的
+            //   卡带、盘面光影透出来，读数压不住。货架这块改成实底；全屏相位仍是那块
+            //   半透明的纱（游戏画面要透出来一点，否则盖在游戏上像一块砖）。
+            //   淡出照旧走 `faded`，所以退出时还是渐隐，不是硬切。
+            let mut base = crate::palette::plate();
+            if plate.narrow() {
+                base[3] = 1.0;
+            }
+            push_plate(plate, top, faded(base, alpha.max(toast)), out);
         }
         // They share the band, so only one at a time. A toast is a specific thing that just
         // happened and outranks a level the user can see the effect of anyway.
         if toast > 0.0 {
-            self.draw_toast(top, now, out);
+            self.draw_toast(top, plate, now, out);
         } else if alpha > 0.0 {
-            self.draw_bar(top, alpha, out);
+            self.draw_bar(top, plate, alpha, out);
         }
-        self.draw_badge(top, ff_badge(self.ff), out);
+        self.draw_badge(top, plate, ff_badge(self.ff), out);
     }
 
-    fn draw_bar(&self, top: f32, alpha: f32, out: &mut Vec<Draw>) {
-        let x = (OUT_W as f32 - BAR_W) / 2.0;
+    fn draw_bar(&self, top: f32, plate: Plate, alpha: f32, out: &mut Vec<Draw>) {
+        let (icon_w, icon_h) = icon_box(HUD_ICON_PX);
+        let (icon_w, icon_h) = (icon_w as f32, icon_h as f32);
+        // ★ 2026-11-03（六六）：货架那块板只有 360 宽，原来 320 的条加左侧图标（24 + 10）
+        //   一共 354，两端只剩 3 px —— 太满。窄板上把条按可用宽度收窄，图标和条
+        //   **作为一组**在板内居中，两端各留 16 px。全宽板仍是老布局，游戏里一个像素不动。
+        const PAD: f32 = 16.0;
+        let (icon_x, bar_x, bar_w) = if plate.narrow() {
+            let room = (plate.w - 2.0 * PAD - icon_w - ICON_GAP).max(BAR_H);
+            let bar_w = BAR_W.min(room);
+            let group = icon_w + ICON_GAP + bar_w;
+            let icon_x = plate.cx() - group * 0.5;
+            (icon_x, icon_x + icon_w + ICON_GAP, bar_w)
+        } else {
+            let x = (OUT_W as f32 - BAR_W) / 2.0;
+            (x - ICON_GAP - icon_w, x, BAR_W)
+        };
+        let bar_y = top + (plate.h - BAR_H) / 2.0;
         if let Some(tex) = self.icon() {
-            let (w, h) = icon_box(HUD_ICON_PX);
             out.push(Draw::Tex {
-                x: x - ICON_GAP - w as f32,
-                y: top + (PLATE_H - h as f32) / 2.0,
-                w: w as f32,
-                h: h as f32,
+                x: icon_x,
+                y: top + (plate.h - icon_h) / 2.0,
+                w: icon_w,
+                h: icon_h,
                 tex,
                 alpha,
             });
         }
         out.push(Draw::Rect {
-            x,
-            y: top + BAR_Y,
-            w: BAR_W,
+            x: bar_x,
+            y: bar_y,
+            w: bar_w,
             h: BAR_H,
             colour: faded(TRACK, alpha),
         });
         out.push(Draw::Rect {
-            x,
-            y: top + BAR_Y,
-            w: BAR_W * self.fraction(),
+            x: bar_x,
+            y: bar_y,
+            w: bar_w * self.fraction(),
             h: BAR_H,
             colour: faded(fill(), alpha),
         });
     }
 
-    fn draw_badge(&self, top: f32, badge: Option<Icon>, out: &mut Vec<Draw>) {
+    fn draw_badge(&self, top: f32, plate: Plate, badge: Option<Icon>, out: &mut Vec<Draw>) {
         let Some(icon) = badge else {
             return;
         };
@@ -276,9 +359,16 @@ impl Hud {
         };
         let (w, h) = icon_box(HUD_ICON_PX);
         let (w, h) = (w as f32, h as f32);
+        // ★ 2026-11-03（六六）：窄板上角标贴**板**的内右沿，不再贴屏幕右缘——
+        //   否则它会飘到 540 以外、落在板外面。
+        let x = if plate.narrow() {
+            plate.right() - BADGE_MARGIN - w
+        } else {
+            OUT_W as f32 - BADGE_MARGIN - w
+        };
         out.push(Draw::Tex {
-            x: OUT_W as f32 - BADGE_MARGIN - w,
-            y: top + (PLATE_H - h) / 2.0,
+            x,
+            y: top + (plate.h - h) / 2.0,
             w,
             h,
             tex,
@@ -288,7 +378,7 @@ impl Hud {
 
     /// No placeholder. A toast is type, and absent type is absent rather than a bar sitting
     /// where two words should be.
-    fn draw_toast(&self, top: f32, now: Millis, out: &mut Vec<Draw>) {
+    fn draw_toast(&self, top: f32, plate: Plate, now: Millis, out: &mut Vec<Draw>) {
         let alpha = self.toast_alpha(now);
         if alpha <= 0.0 {
             return;
@@ -301,11 +391,13 @@ impl Hud {
             return;
         };
         // `toast_rect` places the box inside a plate standing at zero, so the plate's own top
-        // is added here rather than being worked out again down there.
+        // is added here rather than being worked out again down there. Its y is measured
+        // against `PLATE_H`, so a taller plate (the shelf's) centres it by the difference.
+        // Its x is already centred on the screen, which is the same centre the shelf plate has.
         let (x, y, w, h) = toast_rect();
         out.push(Draw::Tex {
             x,
-            y: top + y,
+            y: top + y + (plate.h - PLATE_H) / 2.0,
             w,
             h,
             tex,
@@ -351,6 +443,55 @@ fn fade(shown: Millis, now: Millis) -> f32 {
         return 0.0;
     }
     ((HUD_MS - age) as f32 / FADE_MS as f32).min(1.0)
+}
+
+/// Push the plate: one rect when its ends are square, a rounded box when they are not.
+///
+/// `Draw` has no rounded rectangle, so the two ends are laid in as one-pixel rows, each inset
+/// by its circle at that height — twelve rows a corner for the shelf's plate, which is 24 more
+/// rects. That is only ever paid on the frame a level or a toast is up (1.5 s), and nothing
+/// else on that screen draws a plate, so it is not worth a new `Draw` variant and a shader for.
+fn push_plate(plate: Plate, top: f32, colour: [f32; 4], out: &mut Vec<Draw>) {
+    let r = plate.radius.min(plate.w * 0.5).min(plate.h * 0.5);
+    if r <= 0.0 {
+        out.push(Draw::Rect {
+            x: plate.x,
+            y: top,
+            w: plate.w,
+            h: plate.h,
+            colour,
+        });
+        return;
+    }
+    // The straight middle: everything between the two corner curves.
+    out.push(Draw::Rect {
+        x: plate.x,
+        y: top + r,
+        w: plate.w,
+        h: plate.h - 2.0 * r,
+        colour,
+    });
+    let rows = r.ceil() as i32;
+    for i in 0..rows {
+        // Distance above the corner circle's centre, sampled at the middle of the row.
+        let dy = (i as f32 + 0.5) - r;
+        let inset = r - (r * r - dy * dy).max(0.0).sqrt();
+        let w = plate.w - 2.0 * inset;
+        out.push(Draw::Rect {
+            x: plate.x + inset,
+            y: top + i as f32,
+            w,
+            h: 1.0,
+            colour,
+        });
+        out.push(Draw::Rect {
+            x: plate.x + inset,
+            y: top + plate.h - 1.0 - i as f32,
+            w,
+            h: 1.0,
+            colour,
+        });
+    }
 }
 
 fn faded(colour: [f32; 4], alpha: f32) -> [f32; 4] {

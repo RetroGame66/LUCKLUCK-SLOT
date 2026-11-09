@@ -21,10 +21,24 @@ pub enum Toast {
     AudioStable,
     AudioBalanced,
     AudioStrict,
+    /// The colouring ramps, when SELECT+R1 steps them on the shelf. A look changes every
+    /// pixel on the screen, but *which* look it changed to is not readable off the colours
+    /// alone — twelve ramps and the names are Latin, so the line is what says which one is up.
+    LookChanged,
+    /// ★ 2026-10-20：慢放（L2 双击锁存）开/关。半速的画面和全速的画面**一眼看不出区别** ——
+    ///   画面照旧每个 present 都在出，变的是游戏里的时间 —— 所以这两句是那颗键唯一的回执，
+    ///   没有它这颗键等于按下去没反应。
+    SlowOn,
+    SlowOff,
+    /// ★ 2026-10-20：开机画面写成了 / 没写成。**这两句是那一行唯一的回执** ——
+    ///   写进去的图是机器通电那一刻才读的，当下屏上不会有半点变化，
+    ///   不说一句，这颗键就等于按下去没反应。
+    BootSet,
+    BootFailed,
 }
 
 impl Toast {
-    pub const ALL: [Toast; 7] = [
+    pub const ALL: [Toast; 12] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::CheatsOn,
@@ -32,6 +46,11 @@ impl Toast {
         Toast::AudioStable,
         Toast::AudioBalanced,
         Toast::AudioStrict,
+        Toast::LookChanged,
+        Toast::SlowOn,
+        Toast::SlowOff,
+        Toast::BootSet,
+        Toast::BootFailed,
     ];
 
     /// Position in `ALL`, which is the order faces are uploaded in.
@@ -48,8 +67,35 @@ impl Toast {
             Toast::AudioStable => lang::TOAST_AUDIO_STABLE,
             Toast::AudioBalanced => lang::TOAST_AUDIO_BALANCED,
             Toast::AudioStrict => lang::TOAST_AUDIO_STRICT,
+            // The only toast that is not a constant: which look is up is the whole of what it
+            // has to say, and the name is the mode's row's business. The face is re-rasterised
+            // by the same rebake the look triggers, so the line is the new look's by the time
+            // it fades in — `cycle_look` sets the look *before* raising the flag.
+            Toast::LookChanged => look_line().leak(),
+            Toast::SlowOn => lang::TOAST_SLOW_ON,
+            Toast::SlowOff => lang::TOAST_SLOW_OFF,
+            Toast::BootSet => lang::TOAST_BOOT_SET,
+            Toast::BootFailed => lang::TOAST_BOOT_FAIL,
         }
     }
+}
+
+/// The look toast's line, in the language the build ships in. The leak is bounded: thirteen
+/// names, each leaked once per look change, which is nothing next to the faces themselves.
+#[cfg(feature = "lang-en")]
+fn look_line() -> String {
+    format!(
+        "Look: {}",
+        crate::palette::look_name(crate::palette::look())
+    )
+}
+
+#[cfg(not(feature = "lang-en"))]
+fn look_line() -> String {
+    format!(
+        "配色：{}",
+        crate::palette::look_name(crate::palette::look())
+    )
 }
 
 /// One box for both strings, so which one it is never moves the line.

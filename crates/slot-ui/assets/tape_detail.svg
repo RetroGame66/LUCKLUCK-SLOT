@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 226 135">
+  <!-- The built-in tape's mouldings, shaded into the shell colour rather than drawn in
+       a colour of its own (`cart.rs::mould_detail` multiplies the shell by 0.62 where this
+       mask covers). Scaled with the outline in `tape.svg`: x0.9417, y0.8882. -->
+  <rect x="50.8" y="96.9" width="124.2" height="26.6" rx="6.6" fill="none" stroke="#fff" stroke-width="2.8"/>
+  <circle cx="82.8" cy="110.1" r="11.3" fill="none" stroke="#fff" stroke-width="2.8"/>
+  <circle cx="143.1" cy="110.1" r="11.3" fill="none" stroke="#fff" stroke-width="2.8"/>
+  <circle cx="82.8" cy="110.1" r="3.3" fill="#fff"/>
+  <circle cx="143.1" cy="110.1" r="3.3" fill="#fff"/>
+  <path d="M97,107.4 L128.9,107.4 L128.9,112.8 L97,112.8 Z" fill="#fff"/>
+  <circle cx="14.1" cy="13.3" r="2.7" fill="#fff"/>
+  <circle cx="211.9" cy="13.3" r="2.7" fill="#fff"/>
+  <circle cx="14.1" cy="120.9" r="2.7" fill="#fff"/>
+  <circle cx="211.9" cy="120.9" r="2.7" fill="#fff"/>
+</svg>

@@ -4,9 +4,9 @@ use slot_gfx::{Draw, TexId, OUT_W};
 use slot_store::Cart;
 
 use crate::cart::{label_colour, label_text, size_for, CartSize};
-use slot_store::System;
 use crate::hud::Millis;
-use crate::slot_chrome::draw_empty_slot;
+use crate::slot_chrome::{draw_slot_inside, draw_slot_shell};
+use slot_store::System;
 
 /// The centre cart is drawn larger than the row so it reads as the one in hand; the
 /// neighbours keep their full size but are pushed to the edges (see the `CartSize` pitch). 1.5
@@ -19,7 +19,28 @@ pub const CENTER_SCALE: f32 = 1.5;
 /// How much of its face a side cart keeps at full recede. Public for the same reason as
 /// `CENTER_SCALE`: the app derives how much further to dim the neighbours from it, and that
 /// arithmetic has to follow this number rather than be written down against an old one.
-pub const SIDE_ALPHA: f32 = 0.7;
+///
+/// ★★ 2026-10-28（六六第二次报同一件事：「换了壁纸才发现又犯了一个老问题：货架上的卡带是半
+/// 透明的」）—— **0.7 → 0.90**。
+///
+/// 0.7 这个数一直是按「压暗侧位」的意思在用，可 alpha 合成的结果取决于底下是什么：底是黑的
+/// （默认壁纸中央、暗态 `ground`）时 `0.7 × 卡面 + 0.3 × 黑` 恰好就是"卡面乘 0.7"，看起来是
+/// 压暗——**这七个月的观感一直是这么来的**。底一旦换成卡自己的亮壁纸，同一份 0.3 就原形毕露：
+/// 透出来的是壁纸。
+///
+/// 2026-10-17 用一块剪影黑影去补过，2026-10-25 又因为"贴图不透明、影子只能从 alpha 推、推
+/// 出来是方角矩形"把它删了 —— 删得没错（那推理只对了下半句：贴图不透明**不等于**合成结果
+/// 不透明），但删完没人把那 0.3 处理掉，于是问题第二次冒头。
+///
+/// 真正的杠杆就是这个数：0.90 时壁纸最多透 10%，而它还要先过壁纸自己那层纱（暗态没有、亮态
+/// 0.74、卡自己的图 0.62），实际落到眼睛里 2~4%，看不出。压暗的含义随之退到
+/// 「侧位就是小一号的卡」—— 之前那个"暗"本来就是黑底给的假象，不是这张面自己的颜色。
+///
+/// ★★ 2026-11-05（第三次，六六：「把两侧卡带改不透明」）—— **0.90 → 1.0**。0.90 时壁纸仍
+/// 最多透 10%，真机上还是有人看得出两侧是「半透明的」。抬到 1.0，侧位就是一张完全不透明的
+/// 贴图，底下是什么都不透。「压暗侧位」这个含义到此彻底退掉 —— 之前那个"暗"本来就是黑底给的
+/// 假象，不是这张面自己的颜色，侧位和小一号的卡之间不再有任何透明度差。
+pub const SIDE_ALPHA: f32 = 1.0;
 /// Carts stand on the row rather than float: the foot stays put as a cart shrinks away.
 /// Where the row's feet stand — the carts stand on the row rather than float on it. Derived
 /// from the cart's height, so a taller shell stands lower and the row keeps its proportions.
@@ -97,6 +118,12 @@ pub struct SlotRect {
     /// The cart's own opacity: 1.0 at the selection, `SIDE_ALPHA` at and past one slot out,
     /// then cut by the `recede` the caller asked for.
     pub alpha: f32,
+    /// ★ 2026-10-21：这张是不是**手里拿的那张**（环上的 0 号位）。
+    ///
+    /// 从 `alpha` 反推是不行的：`recede` 会把中心那张也压下去，插卡途中中心位的 alpha
+    /// 可以低到 0.2，而侧位永远是 `SIDE_ALPHA`。焦点光是**位置**的事实，不是透明度的事实，
+    /// 所以它得自己带一个布尔。
+    pub selected: bool,
 }
 
 /// The glide's length in seconds, as a function of the carts it has to cross. Short jumps are
@@ -111,6 +138,15 @@ pub struct Shelf {
     /// Which machine's shelf is up. Every cart on the row belongs to it, and so does the row's
     /// geometry: a Game Boy cart is portrait and a Game Boy shelf is its own layout.
     system: System,
+    /// The row's geometry — the cart's size, the pitch between neighbours, how much bigger the
+    /// selected one is.
+    ///
+    /// A field rather than a call to `size_for` at the point of use, because the row's layout is
+    /// a function of this and of nothing else (`slot_rects` reads `w`, `h`, `pitch`, `middle`,
+    /// `side` and `foot_y` and never asks what a cart *is*). Keeping it here is what lets a shelf
+    /// be laid out for something that is not a machine's cartridge at all: `set_system` derives
+    /// it, and `set_size` overrides it for a shelf whose things are not cartridges.
+    size: CartSize,
     /// The carts the ring actually walks, as indices into `carts`. The full library when
     /// nothing is filtered; the starred ones while the favourites shelf is up. A list of
     /// indices rather than a rebuilt cart list, and that is the whole point: `faces` stays
@@ -124,15 +160,15 @@ pub struct Shelf {
     /// (this card files its three Game Boy carts at 27, 127 and 637 among nine hundred Advance
     /// ones), so any measurement of "how far away is this cart" that walks `carts` is measuring
     /// the wrong thing.
-    machines: [Vec<usize>; 3],
+    machines: [Vec<usize>; MACHINES],
     /// Each machine's own subfolders, sorted and distinct — the folders `folder_pick` chooses
     /// among. A cart loose in its machine's folder contributes none; the folders are read off the
     /// roms' own paths (`Games/<machine>/<folder>/<rom>`), so a card that files its games per
     /// machine and then per language needs no second index to be switchable.
-    folders: [Vec<String>; 3],
+    folders: [Vec<String>; MACHINES],
     /// Which of a machine's subfolders its shelf is showing, or `None` for all of them. Per
     /// machine, so a folder picked on one shelf is still picked when the user comes back to it.
-    folder_pick: [Option<usize>; 3],
+    folder_pick: [Option<usize>; MACHINES],
     /// One entry per cart: its position in its own machine's shelf, or `u32::MAX` for a cart no
     /// shelf shows. Where a switch to that machine lands is the *front* of this list, which is
     /// what makes the front of every machine the set worth keeping faces for.
@@ -149,14 +185,26 @@ pub struct Shelf {
     /// cart up front costs about 70 ms each on this hardware, which is seven seconds on a
     /// hundred-game card spent before the first frame.
     faces: Vec<Option<TexId>>,
-    /// The cart silhouette in black, drawn under a dimmed cart. One texture for the whole
-    /// row: every cart is the same shape.
-    shadow: Option<TexId>,
     /// A cart with a blank label, drawn for a cart whose own face is not built yet. One texture
-    /// for the whole row for the same reason `shadow` is one — until the label goes on they are
-    /// all the same cart — and it is what a jump across the alphabet shows sliding past.
+    /// for the whole row — until the label goes on they are all the same cart — and it is what a
+    /// jump across the alphabet shows sliding past.
     placeholder: Option<TexId>,
+    /// ★ 2026-10-21：手里那张卡脚下的柔光池。一张纹理，整行共用 ——
+    /// 每个选中卡带的脚下都是同一滩光，只是宽度跟着卡带走。
+    focus: Option<TexId>,
+    /// ★ 2026-10-22（六六）：机种 logo 高光区，画在卡座背层（卡带之下）。
+    /// 空槽时可见，卡带一插就盖住。按机种（GB/GBC/GBA/SFC/FC）各一张，`draw` 取
+    /// `self.system` 那一张。`None` 是素材没到位 —— 货架照常画，只是没 logo。
+    logo: [Option<(TexId, u32, u32)>; MACHINES],
     vel: f32,
+    /// Whether the case's own slot is drawn under the row.
+    ///
+    /// **The disc row does not draw it.** The slot is a cartridge bay: it is there so the cart
+    /// the user picked has a visible place to go, and it is the bottom of the screen on every
+    /// cartridge screen. A row of sleeves has no bay and nothing is pushed into one, so drawing
+    /// a mouth under it promises a mechanism the screen does not have (2026-10-07, 六六). Set
+    /// with `set_mouth`, and reset by `set_size`'s callers rather than here.
+    mouth: bool,
     /// The direction being held and when it next repeats. Repeat lives here rather than in
     /// the gesture layer so nothing in game starts auto firing.
     held: Option<(i32, Millis)>,
@@ -167,17 +215,100 @@ pub struct Shelf {
     motion: Option<Motion>,
 }
 
+/// 静置时中间那张卡的**待机动效**：竖轴偏转角（弧度）与脚下柔光的倍数。
+///
+/// ★ 2026-10-25（六六：「1 sway，幅度再大一点点，叠加柔光」）——
+/// 从五种离机预演里挑了这一档：**左右轻摆 + 脚下那池光跟着呼吸**。
+///
+/// ★★ 2026-10-25 00:50（六六：「摆动看起来还是有点奇怪，能朝着玩家晃吗（就是轴是从卡带
+/// 纵向穿过的，卡带左右两侧交替往玩家方向摆）」）——
+/// 第一版是 `Draw::Turned`，也就是**在屏幕平面里转**：卡带看起来像被拧了一下，
+/// 不是"转过来给你看"。改成 **`Draw::Yaw`：绕穿过卡带的竖直轴偏转**，
+/// 于是画出来是**梯形**（近的一侧更高更宽，远的一侧更矮更窄），
+/// 读作"这卡立在桌上，正被左右转着看"。
+///
+/// 为什么是这两个数字：
+/// * **9°** —— 平面内转 1.2° 时边缘位移 7.6px；竖轴偏转要的是**近远两侧的高度差**，
+///   同一个"看得出来"的量落在 9° 上（`YAW_DEPTH = 0.36` ⇒ 近边比远边高 12%）。
+///   比它小就只在中间几像素动，比它大就开始像广角贴脸。
+/// * 柔光取 `light::breathe`（3400 ms，0.55..1.0）—— 那是这台机器上**早就定好**的呼吸节奏
+///   （发光件那颗灯的），不另造一个；两件事同频，观感才是一件东西。
+///
+/// `Idle::NONE` 是**恒等元**：`yaw = 0`、`glow = 1`。所有既有调用点（插卡、退卡、
+/// 选核心、静态出图）都走它，所以这个功能对它们**一个字节都没改**。
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Idle {
+    /// 绕**竖轴**偏转的角度，弧度，正 = 右侧朝观察者。
+    pub yaw: f32,
+    /// 脚下柔光池的强度倍数。
+    pub glow: f32,
+}
+
+impl Idle {
+    /// 不动的那个值。默认即此。
+    pub const NONE: Idle = Idle {
+        yaw: 0.0,
+        glow: 1.0,
+    };
+
+    /// 一帧的待机姿态，`now` 是开机以来的毫秒。
+    ///
+    /// 偏转与柔光**同相位**：`breathe` 在 `phase = .5` 最亮，而 `sin` 在 `.25` 转到底 ——
+    /// 于是卡转到最侧时灯在中值，卡转回正时灯最亮。两条曲线错开四分之一拍，正好谁也不压谁。
+    pub fn at(now: u32) -> Idle {
+        let period = crate::light::BREATHE_MS;
+        let phase = (now % period) as f32 / period as f32;
+        // ⚠️ 光池**不能直接乘 `breathe`**：`breathe` 是 0.55..1.0，可光池自己的峰值
+        //    alpha 只有 **0.22**（`light::pool` 里写着），再乘 0.55 就是 0.12 ——
+        //    在近黑的底上那等于**熄掉**。离机实测：谷底帧里一个琥珀像素都找不到，
+        //    峰值帧 173 个。那是"闪"不是"呼吸"，而 `light::breathe` 的下限本来就是为了
+        //    不闪才不取 0。
+        //    所以把呼吸**映射到 0.72..1.0**：幅度还是那条余弦，但谷底仍是一层看得见的暖光。
+        //    （0.6 试过：谷底 0.6 × 0.22 = 0.13，离机图上仍读作"熄了"；0.72 是
+        //     0.16，同一张对比图里能看出是"暗下去"而不是"没了"。）
+        let b = crate::light::breathe(now);
+        let t = ((b - 0.55) / 0.45).clamp(0.0, 1.0);
+        Idle {
+            yaw: YAW_DEG.to_radians() * (std::f32::consts::TAU * phase).sin(),
+            glow: 0.72 + 0.28 * t,
+        }
+    }
+}
+
+impl Default for Idle {
+    fn default() -> Self {
+        Idle::NONE
+    }
+}
+
+/// **竖轴偏转角**的峰值，度。见 [`Idle`] 的注释：平面内转 1.2° 只挪 7.6px，
+/// 竖轴偏转要让近远两侧差出可见的高度，得 9°。
+const YAW_DEG: f32 = 9.0;
+
+/// **How many machines the shelf keeps a row for** — one per `slot_store::System`, and it is
+/// the length of every per-machine array in this file.
+///
+/// It is a constant rather than the literal `7` it used to be so that adding a machine is one
+/// edit here plus one arm in `machine_slot`, instead of a hunt for every `[..; 7]`. The two
+/// cannot drift: `machine_slot`'s last arm is `MACHINES - 1` by construction, and a machine that
+/// forgot its arm is a compile error rather than an index panic on a card.
+///
+/// ⚠️ **The number itself is load-bearing and may only grow.** A machine's slot is the key
+/// `System/overlay.txt`, `System/display.txt` and `System/shelf.txt` store their settings by,
+/// so renumbering would silently repoint every card already in the field. See `machine_slot`.
+pub const MACHINES: usize = 10;
+
 impl Shelf {
     pub fn new(carts: Vec<Cart>) -> Self {
         let view: Vec<usize> = (0..carts.len()).collect();
-        let mut machines: [Vec<usize>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        let mut machines: [Vec<usize>; MACHINES] = Default::default();
         let mut pos_in_machine = vec![u32::MAX; carts.len()];
         for (i, c) in carts.iter().enumerate() {
             let list = &mut machines[Self::machine_slot(c.system())];
             pos_in_machine[i] = list.len() as u32;
             list.push(i);
         }
-        let mut folders: [Vec<String>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        let mut folders: [Vec<String>; MACHINES] = Default::default();
         for c in &carts {
             let slot = Self::machine_slot(c.system());
             if let Some(f) = folder_of(&c.rom, c.system().dir_name()) {
@@ -197,17 +328,20 @@ impl Shelf {
             carts,
             machines,
             folders,
-            folder_pick: [None, None, None],
+            folder_pick: [None; MACHINES],
             pos_in_machine,
             pos_in_view,
             system: System::Gba,
+            size: size_for(System::Gba),
             view,
             index: 0,
             scroll: 0.0,
             faces: Vec::new(),
-            shadow: None,
             placeholder: None,
+            focus: None,
+            logo: [None; MACHINES],
             vel: 0.0,
+            mouth: true,
             held: None,
             glide: None,
             motion: None,
@@ -223,34 +357,70 @@ impl Shelf {
     /// Which machine the row is showing. Set with the view, because the view is the machine's
     /// carts: a Game Boy shelf is laid out for portrait carts and an Advance shelf for
     /// landscape ones, and the row has to be told which it is looking at.
+    ///
+    /// The geometry comes with it. A caller that wants a row which is not a machine's says so
+    /// afterwards, with `set_size`.
     pub fn set_system(&mut self, system: System) {
         self.system = system;
+        self.size = size_for(system);
     }
 
     pub fn system(&self) -> System {
         self.system
     }
 
+    /// Lay the row out for a size of its own, rather than the one the machine implies.
+    ///
+    /// The row's layout is a function of `CartSize` alone, so a shelf of something that is not a
+    /// cartridge is a shelf with a different size and nothing else: the ring, the spring, the
+    /// glide, the favourites view and the folder switch all carry over untouched.
+    pub fn set_size(&mut self, size: CartSize) {
+        self.size = size;
+    }
+
+    /// Whether the case's own slot is drawn under the row. See the `mouth` field for why the
+    /// disc row turns it off. It is a separate call from `set_size` because it is a separate
+    /// fact: a row can be laid out for something that is not a cartridge and still want the
+    /// slot, and the two are decided by different things.
+    pub fn set_mouth(&mut self, on: bool) {
+        self.mouth = on;
+    }
+
     /// The row's geometry: the cart's own size, the pitch between neighbours and how much
     /// bigger the selected one is.
     pub fn size(&self) -> CartSize {
-        size_for(self.system)
+        self.size
     }
 
     /// Face textures in `carts` order. The caller uploads them because only the compositor
     /// can mint a `TexId`.
+
+    /// The blank cart a not-yet-built face stands in as. Set once at boot.
     ///
     /// Returns the one it replaced: the frame is rebuilt whenever the row's machine changes,
-    /// because the shadow and the stand-in are both cut to that machine's cart, and a caller
-    /// that cannot release the old texture leaks half a megabyte per shelf switch.
-    pub fn set_shadow(&mut self, face: TexId) -> Option<TexId> {
-        self.shadow.replace(face)
-    }
-
-    /// The blank cart a not-yet-built face stands in as. Set once at boot, with the shadow.
-    /// Returns what it replaced, for the reason `set_shadow` does.
+    /// because the stand-in is cut to that machine's cart, and a caller that cannot release
+    /// the old texture leaks half a megabyte per shelf switch.
     pub fn set_placeholder(&mut self, face: TexId) -> Option<TexId> {
         self.placeholder.replace(face)
+    }
+
+    /// ★ 2026-10-21：选中卡带脚下的柔光池。`Option` 是因为它允许被收回去 ——
+    /// 烘焙失败时货架照常画，只是脚下不亮。
+    pub fn set_focus(&mut self, face: Option<TexId>) {
+        self.focus = face;
+    }
+
+    /// ★ 2026-10-22（六六）：机种 logo 高光区，画在卡座背层（卡带之下）。
+    ///
+    /// `Option` 是因为素材没到位时货架照常画，只是没 logo。前端在上传 logo 时用
+    /// `slot_chrome::fill_logo_highlight` 把洋红填成当前主题的 `bright` 色 —— 换主题时
+    /// `rebake()` 重新上传，高光色跟着走。按机种各一张，`draw` 取 `self.system` 那一张。
+    ///
+    /// ⚠️ 数组长度是 `MACHINES`（9），不是"有素材的机种数"：下标就是 `machine_slot`，
+    /// 而那是卡上设置的键。素材缺的机种留 `None`，不能靠缩短数组表达 —— 缩短过一次，
+    /// 结果是加到第七个机种时 `set_logo` 直接越界。
+    pub fn set_logo(&mut self, system: slot_store::System, tex: Option<(TexId, u32, u32)>) {
+        self.logo[Self::machine_slot(system)] = tex;
     }
 
     /// Face textures in `carts` order. The caller uploads them because only the compositor
@@ -360,9 +530,79 @@ impl Shelf {
         self.view.len() != self.carts.len()
     }
 
-    /// Swap the set of carts the ring walks. The frame — the shadow and the placeholder — is
-    /// the shelf's rather than the list's, so it is left alone; `faces` is left alone too, for
-    /// the reason `view` is a list of indices. The caret is parked on `keep` when the new view
+    /// **Read the library again, in place** — the shelf the settings screen's refresh row leaves
+    /// behind (2026-10-17).
+    ///
+    /// Everything derived from the cart list is rebuilt from the new one: the three machine
+    /// shelves, the folder lists, the two position tables. What is *not* touched is everything
+    /// about how the row is drawn rather than what is on it — the system, the size and the mouth
+    /// are the caller's decisions and the new list has no opinion about them, and a refresh must
+    /// not silently reset the machine the user was browsing.
+    ///
+    /// The two things that *are* reset are the ones the new list can invalidate: `folder_pick`,
+    /// because a folder that existed a moment ago may not any more and an index into a list that
+    /// moved is a wrong cart rather than a missing one; and the ring itself, which is parked back
+    /// on the front of the view (`keep` if it still names a cart, the first otherwise) — the
+    /// caret cannot be trusted across an edit that may have removed the cart it was on.
+    ///
+    /// **The old faces are handed back rather than dropped.** Half a megabyte each, and only the
+    /// caller has the compositor that can release them; a shelf that forgot them without saying so
+    /// would leak the whole resident window on every refresh. The returned vector is exactly the
+    /// ones that were live, in `carts` order, so the caller can walk it and release each.
+    pub fn replace_library(&mut self, carts: Vec<Cart>, keep: Option<&str>) -> Vec<TexId> {
+        let mut machines: [Vec<usize>; MACHINES] = Default::default();
+        let mut pos_in_machine = vec![u32::MAX; carts.len()];
+        for (i, c) in carts.iter().enumerate() {
+            let list = &mut machines[Self::machine_slot(c.system())];
+            pos_in_machine[i] = list.len() as u32;
+            list.push(i);
+        }
+        let mut folders: [Vec<String>; MACHINES] = Default::default();
+        for c in &carts {
+            let slot = Self::machine_slot(c.system());
+            if let Some(f) = folder_of(&c.rom, c.system().dir_name()) {
+                if !folders[slot].contains(&f) {
+                    folders[slot].push(f);
+                }
+            }
+        }
+        for f in folders.iter_mut() {
+            f.sort();
+        }
+
+        let view: Vec<usize> = (0..carts.len()).collect();
+        let mut pos_in_view = vec![u32::MAX; carts.len()];
+        for (p, &i) in view.iter().enumerate() {
+            pos_in_view[i] = p as u32;
+        }
+
+        // The live faces come off first, before anything is overwritten: after `self.carts`
+        // moves, a `TexId` in the old table is a handle to a cart that is no longer there and
+        // nothing would be able to line them up again.
+        let released: Vec<TexId> = self.faces.iter().filter_map(|f| *f).collect();
+
+        self.carts = carts;
+        self.machines = machines;
+        self.folders = folders;
+        self.folder_pick = [None; MACHINES];
+        self.pos_in_machine = pos_in_machine;
+        self.pos_in_view = pos_in_view;
+        self.view = view;
+        self.faces = Vec::new();
+        self.index = keep
+            .and_then(|stem| self.view.iter().position(|&i| self.carts[i].stem == stem))
+            .unwrap_or(0);
+        self.scroll = self.index as f32;
+        self.vel = 0.0;
+        self.glide = None;
+        self.held = None;
+        self.motion = None;
+        released
+    }
+
+    /// Swap the set of carts the ring walks. The frame — the placeholder — is the shelf's
+    /// rather than the list's, so it is left alone; `faces` is left alone too, for the reason
+    /// `view` is a list of indices. The caret is parked on `keep` when the new view
     /// still holds it, and on the first cart otherwise.
     pub fn set_view(&mut self, view: Vec<usize>, keep: Option<&str>) {
         for slot in self.pos_in_view.iter_mut() {
@@ -372,6 +612,19 @@ impl Shelf {
             self.pos_in_view[i] = p as u32;
         }
         self.view = view;
+        // ★★ 2026-10-27 23:1x（六六）：「按一比一像素就行了」。
+        //
+        // 盒子除了机种还要看**这一行卡自己的目录**：`Games/FC` 与 `Games/NES` 都是
+        // `System::Fc`，可两张缺省图一个是 360×229、一个是 300×334 —— 同一个盒子必然把
+        // 其中一张拉变形。货架本来就是按文件夹分的，所以一行里的卡通常同目录；只有这种情况
+        // 才换盒子，混合行（收藏夹那一行跨机种）仍然走 `set_system` 给机种盒子。
+        let mut dirs = self.view.iter().filter_map(|&i| self.carts[i].dir_name());
+        if let Some(first) = dirs.next() {
+            let same = dirs.all(|d| d.eq_ignore_ascii_case(first));
+            if same {
+                self.size = crate::cart::size_for_dir(Some(first), self.system);
+            }
+        }
         self.index = keep
             .and_then(|stem| self.view.iter().position(|&i| self.carts[i].stem == stem))
             .unwrap_or(0);
@@ -414,12 +667,28 @@ impl Shelf {
         Some(d.min(n - d))
     }
 
-    /// Which of the three shelves a machine's carts live on.
+    /// Which of the seven shelves a machine's carts live on. The order is the enum's
+/// (`Gba, Gb, Gbc, Sfc, Fc, Neogeo, Arcade`), and it only grows: a shelf's index is
+/// what `System/overlay.txt` and `System/display.txt` slot by, so reordering it would
+/// silently repoint every card's saved settings at another machine.
     fn machine_slot(s: System) -> usize {
         match s {
             System::Gba => 0,
             System::Gb => 1,
             System::Gbc => 2,
+            System::Sfc => 3,
+            System::Fc => 4,
+            System::Neogeo => 5,
+            System::Arcade => 6,
+            // ★ 2026-10-25：MD / PS1 追加在末尾 —— 与前七行同一个理由，一个货架的编号
+            //   是卡上 `overlay.txt` / `display.txt` / `shelf.txt` 的键，插队会把每一张
+            //   已经发出去的卡上的设置静默指到别的机种。
+            System::Md => 7,
+            System::Ps1 => 8,
+            // ★ 2026-10-25：PCE 追加在末尾 —— 与上面同一个理由，货架编号是卡上
+            //   `overlay.txt` / `display.txt` / `shelf.txt` 的键，插队会把每一张已经发
+            //   出去的卡上的设置静默指到别的机种。
+            System::Pce => 9,
         }
     }
 
@@ -429,7 +698,15 @@ impl Shelf {
         let slot = Self::machine_slot(s);
         let all = &self.machines[slot];
         let Some(name) = self.folder_pick[slot].and_then(|p| self.folders[slot].get(p)) else {
-            return all.clone();
+            // No subfolder picked: the machine's own shelf, with the games filed inside
+            // subfolders kept out of sight. Tapping Y walks into each subfolder in turn and
+            // comes back here, so this is the "machine folder" state — top-level only
+            // (2026-10-10, 六六).
+            return all
+                .iter()
+                .copied()
+                .filter(|&i| folder_of(&self.carts[i].rom, s.dir_name()).is_none())
+                .collect();
         };
         all.iter()
             .copied()
@@ -442,6 +719,26 @@ impl Shelf {
     /// Step one machine's subfolder filter: all -> the first folder -> ... -> all. `false` when
     /// the machine has no subfolders, so the caller can refuse the press rather than let it read
     /// as a key that worked.
+    /// One machine's shelf, but **never empty when that machine has subfolders**.
+    ///
+    /// ★ 2026-10-24（真机上抓到的）：卡上 15 盘 GBA 全在 `Games/GBA/GBA中文游戏甄选/` 里，
+    /// 而「机种文件夹只显示顶层」这条规则让 `machine_view` 返回空 —— 开机是一片空白货架，
+    /// 连为什么空都看不出来（字母条还在，说明有 15 盘游戏）。
+    /// ⇒ 顶层为空而机种有子文件夹时，落到**第一个子文件夹**；那正是按一下 Y 会到的地方，
+    /// 所以观感上没有多一层，只是不让空屏出现。
+    pub fn machine_view_or_first_folder(&mut self, s: System) -> Vec<usize> {
+        let view = self.machine_view(s);
+        if !view.is_empty() {
+            return view;
+        }
+        let slot = Self::machine_slot(s);
+        if self.folders[slot].is_empty() {
+            return view;
+        }
+        self.folder_pick[slot] = Some(0);
+        self.machine_view(s)
+    }
+
     pub fn cycle_folder(&mut self, s: System) -> bool {
         let slot = Self::machine_slot(s);
         let n = self.folders[slot].len();
@@ -643,11 +940,33 @@ impl Shelf {
         self.scroll += self.vel * dt;
     }
 
-    /// The shelf screen: the row of carts and the slot under it. What is printed on the case
-    /// is drawn after this, by whoever holds the type.
+
+/// The shelf screen: the row of carts and the slot under it. What is printed on the case
+/// is drawn after this, by whoever holds the type.
+    ///
+    /// ★ 2026-10-22（六六：机种框是顶层、预留插口弧度）：底条拆成两半夹住卡带 ——
+    ///   **内侧洞（`draw_slot_inside`：开口/凹腔/缝/拇指弧）先画，压在卡带之下**，卡带插进去
+    ///   时遮住它、露出插口弧度；**外壳（`draw_slot_shell`：裁掉卡带下缘的塑料）后画，压在卡带
+    ///   之上**。顶条/系统显示由调用方（`app.rs`）在这之后画，整体落在卡带之上。这样堆叠自下而上
+    ///   是：壁纸 → 卡槽内侧 → 卡带 → 机种框（顶条+底条外壳）→ 系统显示，不再是整块 `draw_empty_slot`
+    ///   把暗洞也压在卡带之上（那让卡带像在洞前面漂浮、插口弧度被卡带遮住）。
     pub fn draw(&self, shake: f32, out: &mut Vec<Draw>) {
-        self.draw_row(None, shake, 0.0, 1.0, out);
-        draw_empty_slot(out);
+        self.draw_idle(shake, Idle::NONE, out)
+    }
+
+    /// 同 [`Shelf::draw`]，外加静置时的待机动效。
+    pub fn draw_idle(&self, shake: f32, idle: Idle, out: &mut Vec<Draw>) {
+        if self.mouth {
+            draw_slot_inside(out);
+            // ★ 2026-10-22（六六）：机种 logo 在卡座背层（卡带之下）。空槽时可见，卡带一插就盖住。
+            if let Some(logo) = self.logo[Self::machine_slot(self.system)] {
+                crate::slot_chrome::draw_slot_logo(logo, out);
+            }
+        }
+        self.draw_row_idle(None, shake, 0.0, 1.0, idle, out);
+        if self.mouth {
+            draw_slot_shell(out);
+        }
     }
 
     /// The row alone. The cart on its way into the slot is drawn by the chrome, at the same
@@ -663,8 +982,9 @@ impl Shelf {
     /// reads as making way for the one that was chosen.
     ///
     /// `dim` darkens the faces further and nothing else: 1.0 leaves them as `recede` has them.
-    /// The black under a dimmed cart stays as `recede` alone makes it, so a dimmed cart reads
-    /// as a cart in shadow rather than a ghost over the wallpaper.
+    ///
+    /// ★ 2026-10-25：**侧位卡带脚下那块黑影已经不画了**（见 `draw_row_idle` 里那段说明）。
+    /// 这里跟着改，是因为旧文档还在描述一个不存在的图层。
     pub fn draw_row(
         &self,
         hidden: Option<&str>,
@@ -673,37 +993,100 @@ impl Shelf {
         dim: f32,
         out: &mut Vec<Draw>,
     ) {
+        self.draw_row_idle(hidden, shake, recede, dim, Idle::NONE, out)
+    }
+
+    /// 同 [`Shelf::draw_row`]，外加中间那张卡的待机动效（见 [`Idle`]）。
+    pub fn draw_row_idle(
+        &self,
+        hidden: Option<&str>,
+        shake: f32,
+        recede: f32,
+        dim: f32,
+        idle: Idle,
+        out: &mut Vec<Draw>,
+    ) {
         let dim = dim.clamp(0.0, 1.0);
         for r in self.slot_rects(hidden, shake, recede) {
             let cart = &self.carts[r.cart];
-            // Black in the cart's own shape, under the dimmed face. Without it the dimming is
-            // transparency, and over a wallpaper the row reads as ghosts of carts.
-            // The shadow exists to keep a dimmed cart solid: drawn at 0.7 the face is see-through,
-            // and over a wallpaper a translucent cart is a ghost. A cart that came with its own
-            // art does not need it — the art is opaque — and drawing it anyway leaves the
-            // silhouette showing through the art's antialiased edge as a dark rim on a light
-            // theme, which is exactly what it looked like.
-            if r.alpha < 1.0 && crate::cart_art::art_for(self.system).is_none() {
-                if let Some(tex) = self.shadow {
+            // ★ 2026-10-17 曾经在这里画过一块"卡带剪影涂黑"，垫在变暗的侧位卡下面，
+            //   用来对付 `SIDE_ALPHA = 0.7` 把整张面乘成 70% 透、在壁纸上读作鬼影的问题。
+            //   **2026-10-25 整条删掉了**，理由见下面 `Draw::Tex` 之前那一段
+            //   （根子是：它的形状只能从贴图 alpha 推，而贴图铺满画布 ⇒ 推出来是一块方角矩形）。
+            //
+            // ★ 2026-10-21：手里那张卡**脚下**的一池柔光（`light::pool`）。
+            //
+            //   第一版在这里画的是一圈 1px 琥珀发丝边，六六否了，原话：
+            //   「卡带贴图不是死板的矩形，它是有轮廓的，好不容易做的透明底被你一框又是一个矩形。」
+            //   完全正确 —— 卡带的贴图是按真实形状裁的透明 PNG，一个矩形框等于把已经做出来的
+            //   轮廓重新宣布成矩形。所以改成光池：画在卡带脚下、比卡带宽一截、比卡带矮得多，
+            //   **一根线都不压卡带自己的边**。
+            //
+            //   条件仍是 `dim > 0.99 && r.alpha > 0.9`：换核心、插卡这些时候焦点已经不在
+            //   这张卡上，留一池亮光会让人以为它还能按。**侧位一个都不画** —— 都亮就等于都不亮。
+            if r.selected && dim > 0.99 && r.alpha > 0.9 {
+                if let Some(tex) = self.focus {
+                    let pw = r.w * 1.25;
+                    let ph = 20.0;
                     out.push(Draw::Tex {
-                        x: r.x,
-                        y: r.y,
-                        w: r.w,
-                        h: r.h,
+                        x: r.x - (pw - r.w) / 2.0,
+                        // 压在落脚线上：光是从货架面往上映的，不是从卡带往下打的。
+                        y: r.y + r.h - ph / 2.0,
+                        w: pw,
+                        h: ph,
                         tex,
-                        alpha: recede_alpha(r.alpha),
+                        // ★ 2026-10-25（六六选定 sway + 柔光）：这池光跟着呼吸。
+                        //   `Idle::NONE` 的 `glow` 是 1.0 ⇒ 其它调用点（插卡、选核心、
+                        //   静态出图）一个字节都不变。
+                        alpha: crate::light::gain() * idle.glow,
                     });
                 }
             }
+            // ★★ 2026-10-25 01:1x（六六：「GBC 的阴影还没拿掉，还是兜底的那个代码画的 svg」）——
+            //   **侧位卡带脚下那块黑影，整条链路删掉了。**
+            //
+            //   它原来的职责是"别让半透明的侧位卡在壁纸上看成鬼影"。但卡带早就是一张带 alpha
+            //   的贴图，而这影子的形状只能从**同一个 alpha** 推出来 —— 贴图本身几乎铺满画布
+            //   （`cart_gbc.png` 只有 2.6% 是透明的），于是推出来的"轮廓"就是**一块方角矩形**，
+            //   比卡带的圆角大一圈，在边沿露出一道直边。那不是影子，是兜底形状。
+            //
+            //   六六 2026-10-24 就说过「目前已经是卡带贴图了也不怕透光了」—— 这句话现在确实成立：
+            //   `SIDE_ALPHA` 只是把整张面压暗，贴图本身不透明，透出来的是它自己的暗面而不是壁纸。
+            //   所以影子没有存在的必要，`cart_shadow` / `set_shadow` 一并删除。
             out.push(match self.faces.get(r.cart).copied().flatten() {
-                Some(tex) => Draw::Tex {
-                    x: r.x,
-                    y: r.y,
-                    w: r.w,
-                    h: r.h,
-                    tex,
-                    alpha: r.alpha * dim,
-                },
+                Some(tex) => {
+                    // ★★ 2026-10-25（六六：「摆动看起来还是有点奇怪，能朝着玩家晃吗（就是轴
+                    //    是从卡带纵向穿过的，卡带左右两侧交替往玩家方向摆）」）——
+                    //    静置时**中间那张卡绕着穿过自己的竖直轴转**：`Draw::Yaw`，画出来是
+                    //    梯形，近的一侧更高更宽。判据与脚下柔光池同一道（选中 + 不在让位 +
+                    //    不透明），所以两者永远一起出现、一起消失，不会"光在呼吸而卡是死的"。
+                    //    ⚠️ 这不是屏幕平面内的旋转（`Draw::Turned`）—— 那个看起来像被拧了一下。
+                    let yaw = if r.selected && dim > 0.99 && r.alpha > 0.9 {
+                        idle.yaw
+                    } else {
+                        0.0
+                    };
+                    if yaw == 0.0 {
+                        Draw::Tex {
+                            x: r.x,
+                            y: r.y,
+                            w: r.w,
+                            h: r.h,
+                            tex,
+                            alpha: r.alpha * dim,
+                        }
+                    } else {
+                        Draw::Yaw {
+                            x: r.x,
+                            y: r.y,
+                            w: r.w,
+                            h: r.h,
+                            tex,
+                            alpha: r.alpha * dim,
+                            yaw,
+                        }
+                    }
+                }
                 // A cart whose face has not been uploaded still holds its place, and as a cart.
                 // A jump across the alphabet crosses hundreds of carts and hundreds of faces
                 // cannot be held at once — but every cart can still carry *its own* colour, so
@@ -859,6 +1242,7 @@ impl Shelf {
                 w,
                 h,
                 alpha,
+                selected: slot == 0,
             });
         }
         out
@@ -887,15 +1271,17 @@ fn folder_of(rom: &Path, machine: &str) -> Option<String> {
         .collect();
     let root = parts.iter().rposition(|p| *p == GAMES_DIR)?;
     let mut rest = &parts[root + 1..];
-    if rest.first() == Some(&machine) {
+    // The machine folder is stripped whether it is spelled the canonical way or one of the
+    // aliases `System::from_dir` also takes (`NES` for `FC`, `SNES` for `SFC`). Matching the
+    // canonical name alone would file every rom under a folder named after its own machine,
+    // which hides the whole shelf behind a subfolder switch that was never picked.
+    if rest
+        .first()
+        .is_some_and(|d| slot_store::System::from_dir(d).map(System::dir_name) == Some(machine))
+    {
         rest = &rest[1..];
     }
     // Whatever is left in front of the file is the subfolder, if any is left at all.
     (rest.len() >= 2).then(|| rest[0].to_string())
 }
 
-/// How solid the shadow under a dimmed cart is. It carries the whole of the cart's opacity
-/// while the face is translucent over it, and leaves with the face as the row parts.
-fn recede_alpha(face_alpha: f32) -> f32 {
-    (face_alpha / SIDE_ALPHA).clamp(0.0, 1.0)
-}

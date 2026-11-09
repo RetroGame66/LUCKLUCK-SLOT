@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+  <!-- The built-in sleeve's mouldings, shaded into the shell colour rather than drawn in a colour
+       of its own (`cart.rs::mould_detail` multiplies the shell by 0.62 where this mask covers).
+
+       A jewel case's own detail is the **spine**: the raised left edge where the two halves of
+       the plastic meet, and the disc's own hub showing through the back. Only the spine is cut
+       here — a hub would sit under the cover, and the cover is the artwork, so drawing one
+       would put a grey disc in the middle of every sleeve whose art does not cover it. -->
+  <rect x="6" y="10" width="9" height="280" rx="4.5" fill="none" stroke="#fff" stroke-width="3"/>
+</svg>

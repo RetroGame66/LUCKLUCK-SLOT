@@ -38,7 +38,26 @@ const EXACT: &[(&str, Shell)] = &[
 const FAMILY: &[(u8, Shell)] = &[(b'M', shell([0xc6, 0xc6, 0xc9], Finish::Solid))];
 
 /// `code` is the four character game code; only the first three are matched.
+///
+/// The card's own table answers first (`cart_rules`): a row naming this game's shell wins
+/// over anything here, which is what makes the shelf's colours editable without a rebuild.
+/// A row that names no colour — a badge or a film alone — falls through, so the built-in
+/// answer stands for everything the card does not colour.
 pub fn shell_for(code: &str) -> Shell {
+    resolve(code, crate::cart_rules::for_code(code))
+}
+
+/// The rule and the built-in table, decided apart from the installed table so the order is
+/// testable without a card.
+fn resolve(code: &str, row: Option<&crate::cart_rules::Row>) -> Shell {
+    if let Some(row) = row {
+        if let Some(colour) = row.shell {
+            return Shell {
+                colour,
+                finish: row.finish.unwrap_or(Finish::Solid),
+            };
+        }
+    }
     lookup(code, EXACT, FAMILY)
 }
 
@@ -71,4 +90,42 @@ fn lookup(code: &str, exact: &[(&str, Shell)], family: &[(u8, Shell)]) -> Shell 
         }
     }
     DEFAULT_SHELL
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cart_rules::{Foil, FoilKind, Row};
+
+    /// The card's row wins over the built-in table — including over a code the built-in
+    /// table colours itself — and a row that names no colour lets the built-in answer
+    /// stand. The finish travels with the colour when the row states one.
+    #[test]
+    fn the_cards_row_answers_first() {
+        let coloured = Row {
+            shell: Some([1, 2, 3]),
+            ..Row::default()
+        };
+        assert_eq!(resolve("ZZZZ", Some(&coloured)).colour, [1, 2, 3]);
+        // The same code the built-in table paints ruby: the row wins.
+        assert_eq!(resolve("AXVJ", Some(&coloured)).colour, [1, 2, 3]);
+        assert_eq!(resolve("AXVJ", None).colour, [0xc2, 0x33, 0x2e]);
+        // A row carrying only a badge leaves the built-in colour alone.
+        let badge_only = Row {
+            badge: Some(7),
+            foil: Some(Foil {
+                kind: FoilKind::Holo,
+                strength: 0.35,
+            }),
+            ..Row::default()
+        };
+        assert_eq!(resolve("AXVJ", Some(&badge_only)).colour, [0xc2, 0x33, 0x2e]);
+        // And the finish comes with the colour when the row states one.
+        let clear = Row {
+            shell: Some([9, 9, 9]),
+            finish: Some(Finish::Translucent),
+            ..Row::default()
+        };
+        assert_eq!(resolve("ZZZZ", Some(&clear)).finish, Finish::Translucent);
+    }
 }

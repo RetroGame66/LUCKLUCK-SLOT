@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+  <!-- The built-in CD sleeve's outline: the fallback for a card that ships no sleeve art.
+       300x300 is 1:1, which is a CD sleeve exactly (142 mm square) rather than approximately —
+       see `cd.rs` for why the size is 300 and not the panel's width.
+
+       The path is a rounded square with a **7 px corner radius**, the same radius the cassette
+       outline uses at its own scale, so the two shapes read as objects from one family. The
+       jewel case's own shape is that of a rectangle with a slightly clipped spine on the left;
+       the spine is deliberately NOT cut here, because a card that ships its own art draws its
+       own spine (it is the artist's, not the format's) and a built-in cut-in spine would show
+       through as a transparent stripe down the front of every sleeve drawn without art. -->
+  <path d="M7.5,0 L292.5,0 C296.6,0 300,3.4 300,7.5 L300,292.5 C300,296.6 296.6,300 292.5,300 L7.5,300 C3.4,300 0,296.6 0,292.5 L0,7.5 C0,3.4 3.4,0 7.5,0 Z" fill="#fff"/>
+</svg>

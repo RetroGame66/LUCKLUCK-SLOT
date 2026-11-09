@@ -60,6 +60,16 @@ fn quads(out: &[Draw]) -> Vec<Quad> {
             Draw::Turned {
                 x, y, w, h, alpha, ..
             } => Quad { x, y, w, h, alpha },
+            Draw::Yaw {
+                x, y, w, h, alpha, ..
+            } => Quad { x, y, w, h, alpha },
+            // A badge or a film is drawn at its own rect like any other quad on the list.
+            Draw::Glyph {
+                x, y, w, h, alpha, ..
+            }
+            | Draw::Foil {
+                x, y, w, h, alpha, ..
+            } => Quad { x, y, w, h, alpha },
             Draw::Game | Draw::Glow | Draw::Shot { .. } => Quad {
                 x: 0.0,
                 y: 0.0,

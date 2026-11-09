@@ -737,23 +737,37 @@ mod tests {
         assert_eq!((chart.cols(), chart.rows()), (SWEEP.len(), SWEEP_ROWS));
         // An untransformed chart is exactly the tables it is built from, in reading order.
         for (i, s) in chart.stops().iter().enumerate() {
-            let want = if i < SWEEP.len() { SWEEP[i] } else { TONE[i - SWEEP.len()] };
+            let want = if i < SWEEP.len() {
+                SWEEP[i]
+            } else {
+                TONE[i - SWEEP.len()]
+            };
             assert_eq!(*s, want, "stop {i}");
         }
         // The tone row climbs and the hues do not, which is what makes the two rows tell two
         // different things rather than being one picture printed twice.
         let tones = &chart.stops()[SWEEP.len()..];
         for (i, s) in tones.iter().enumerate() {
-            assert_eq!((s[0], s[1]), (s[2], s[2]), "tone stop {i} is {s:?}, which is not neutral");
+            assert_eq!(
+                (s[0], s[1]),
+                (s[2], s[2]),
+                "tone stop {i} is {s:?}, which is not neutral"
+            );
             if i > 0 {
-                assert!(s[0] > tones[i - 1][0], "the tone strip is not monotonic at {i}");
+                assert!(
+                    s[0] > tones[i - 1][0],
+                    "the tone strip is not monotonic at {i}"
+                );
             }
         }
         assert_eq!(tones[0], [0, 0, 0], "the strip starts at black");
         assert_eq!(tones[SWEEP.len() - 1], [255, 255, 255], "and ends at white");
         // Every hue is a hue: a stop with no channel in it is a hole in the panel, not a colour.
         for (i, s) in chart.stops()[..SWEEP.len()].iter().enumerate() {
-            assert!(s.iter().any(|v| *v > 200), "hue {i} is {s:?}, which reads as black");
+            assert!(
+                s.iter().any(|v| *v > 200),
+                "hue {i} is {s:?}, which reads as black"
+            );
         }
 
         // The transform is the caller's, and it is applied to every stop — which is what makes a

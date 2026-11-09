@@ -45,6 +45,12 @@ fn ink() -> [u8; 3] {
     crate::palette::ink()
 }
 
+/// 顶栏上那行游戏名的墨色 —— **不是 `ink()`**，见 `palette::plate_ink`（2026-10-24：
+/// 亮色模式下部分 look 的游戏名压在顶栏灰底上只有 1.6–2.8:1）。
+fn plate_ink() -> [u8; 3] {
+    crate::palette::plate_ink()
+}
+
 const KEY_PX: f32 = 14.0;
 const LABEL_PX: f32 = 16.0;
 const LABEL_MIN_PX: f32 = 10.0;
@@ -86,10 +92,44 @@ const TITLE_MIN_PX: f32 = 12.0;
 /// clipped title rather than a failing test: the fitter shrinks for *width* and has no opinion
 /// about height at all. Forty is thirty plus five of air either side, which is what a CJK glyph
 /// at this size needs to keep its top and bottom strokes.
-pub const SHELF_TITLE_W: u32 = 640;
+/// 名称栏（铭牌）自己的几何：360 宽、54 深，挂在屏幕顶边正中。
+pub const PLATE_X0: f32 = 160.0;
+pub const PLATE_X1: f32 = 560.0;
+pub const PLATE_H: f32 = 54.0;
+/// ★ 2026-10-24（六六）：「顶部名称栏有 360px，名称限定宽度为 300px；收藏符号移至名称栏
+///   左边 30px 区域，按 24px 居中；电量改成竖放的电池图标，移至名称栏右边 30px 区域，
+///   按 24px 居中」。30 + 300 + 30 = 360，正好把栏内切成三段。
+pub const PLATE_MARK: f32 = 24.0;
+/// ★ 2026-10-24（六六）：顶栏 400 宽 = 左 40 信息 / 中 320 名称 / 右 40 信息。
+pub const PLATE_MARK_ZONE: f32 = 40.0;
+/// 两条分割线：信息区与名称区之间，各 1px。画在栏内、上下留边。
+pub fn plate_divider_x() -> [f32; 2] {
+    [
+        PLATE_X0 + PLATE_MARK_ZONE,
+        PLATE_X1 - PLATE_MARK_ZONE,
+    ]
+}
+/// 左段（收藏）与右段（电量）里 24px 角标的左上角。
+pub fn plate_fav_x() -> f32 {
+    PLATE_X0 + (PLATE_MARK_ZONE - PLATE_MARK) / 2.0
+}
+pub fn plate_battery_x() -> f32 {
+    PLATE_X1 - PLATE_MARK_ZONE + (PLATE_MARK_ZONE - PLATE_MARK) / 2.0
+}
+/// 分割线的矩形 `(x, y, w, h)`：1px 宽，顶栏里上下各留 10px。
+pub fn plate_divider_rect(i: usize) -> (f32, f32, f32, f32) {
+    (plate_divider_x()[i], 10.0, 1.0, PLATE_H - 20.0)
+}
+
+/// 两枚角标同一行：竖直居中在名称栏里。
+pub fn plate_mark_y() -> f32 {
+    PLATE_H / 2.0 - PLATE_MARK / 2.0
+}
+
+/// ★ 2026-10-24（六六）：名称显示区 320px 宽（400 − 两侧各 40），字号 26。
+pub const SHELF_TITLE_W: u32 = 320;
 pub const SHELF_TITLE_H: u32 = 40;
-const SHELF_TITLE_PX: f32 = 30.0;
-const SHELF_TITLE_MIN_PX: f32 = 14.0;
+const SHELF_TITLE_PX: f32 = 26.0;
 
 pub struct UndoFace {
     pub rgba: Vec<u8>,
@@ -188,6 +228,35 @@ pub fn word_face(text: &str) -> UndoFace {
     }
 }
 
+/// ★ 2026-11-03（六六）：「字体有点小」。状态行那档（`word_face`，24px 挤在 20 高的带子里）
+/// 原是给顶栏电池/时钟那个窄仓位定的，Wi-Fi 配置页和直连提示整页挂在它身上就偏小。
+/// 整页的文字另开一档：三十二，带高四十四（正好装下 `ascent - descent` 的整 em 框，
+/// 见 `STATUS_H` 上那段关于「超高的墨会被丢而不是缩」的注释）。
+///
+/// 带高必须跟着字号走，不能沿用 `STATUS_H`：`text::fit` 只管宽度，`text::coverage` 把
+/// 基线按 `(dst_h - block_h)/2 + ascent` 摆，带子矮了就把字顶（或字底）裁掉。
+pub const PAGE_PX: f32 = 32.0;
+pub const PAGE_MIN_PX: f32 = 20.0;
+pub const PAGE_H: u32 = 44;
+/// 整页一行的最宽：屏宽七百二减左右各四十的留白。
+pub const PAGE_MAX_W: f32 = 640.0;
+
+/// A line of type on a full page rather than in a status slot — the same face, at the size a
+/// page is read at.
+pub fn page_face(text: &str) -> UndoFace {
+    let w = band_width_capped(text, PAGE_PX, PAGE_MIN_PX, PAGE_MAX_W);
+    let mut rgba = vec![0u8; (w * PAGE_H * 4) as usize];
+    if let Some(font) = text::label_font() {
+        let layout = text::fit(font, text, w as f32, 1, PAGE_PX, PAGE_MIN_PX);
+        text::draw_centred(&mut rgba, w, PAGE_H, &layout, ink());
+    }
+    UndoFace {
+        rgba,
+        w,
+        h: PAGE_H,
+    }
+}
+
 /// The time. Same face and same band as the battery's percent — the two halves of one status row.
 pub fn clock_width(text: &str) -> u32 {
     band_width_at(text, CLOCK_PX, CLOCK_MIN_PX)
@@ -241,16 +310,23 @@ fn band_width(label: &str) -> u32 {
 /// which is what keeps their widths, their shrink thresholds and their fitter rules from drifting
 /// apart the moment one of the two sizes is touched.
 fn band_width_at(label: &str, px: f32, min_px: f32) -> u32 {
+    band_width_capped(label, px, min_px, LABEL_MAX_W)
+}
+
+/// [`band_width_at`] with the width ceiling stated too. It is a parameter rather than the
+/// constant because a full page's line is as wide as the screen, not as wide as a hint's label:
+/// 140 would break a Wi-Fi SSID across two lines the moment it arrived.
+fn band_width_capped(label: &str, px: f32, min_px: f32, max_w: f32) -> u32 {
     let Some(font) = text::label_font() else {
-        return LABEL_MAX_W as u32;
+        return max_w as u32;
     };
-    let layout = text::fit(font, label, LABEL_MAX_W, 1, px, min_px);
+    let layout = text::fit(font, label, max_w, 1, px, min_px);
     let ink = layout
         .lines
         .iter()
         .map(|l| text::line_width(font, l, layout.px, layout.tracking))
         .fold(0.0, f32::max);
-    (ink.ceil() as u32).clamp(1, LABEL_MAX_W as u32)
+    (ink.ceil() as u32).clamp(1, max_w as u32)
 }
 
 /// One line of type for the top plate, naming the entry under the eye.
@@ -297,21 +373,36 @@ pub fn dialog_line_face(text: &str, px: f32) -> UndoFace {
 /// on the cart are the same words — `slot_store::clean_label` is the one place that decides which
 /// part of a dumped filename is the game and which part is a fact about the dump.
 pub fn shelf_title_face(text: &str) -> UndoFace {
-    let mut rgba = vec![0u8; (SHELF_TITLE_W * SHELF_TITLE_H * 4) as usize];
+    // ★ 2026-10-24（六六）：「长名字不缩字号，循环滚动就行」——
+    //   一律按设计字号（`SHELF_TITLE_PX`）单行排，**不再为了塞进 300px 而缩号**；
+    //   面宽 = max(300, 实测宽)。超宽的那部分由 `app.rs` 在 300px 的窗里循环推着走
+    //   （`Draw::Glyph` 采样一条滑动的 uv 子矩形），所以这里的宽度是"整条字"的宽度。
+    let mut face_w = SHELF_TITLE_W;
+    let mut layout = None;
     if let Some(font) = text::label_font() {
-        let layout = text::fit(
+        let l = text::fit(
             font,
             text,
-            SHELF_TITLE_W as f32,
+            f32::MAX,
             1,
             SHELF_TITLE_PX,
-            SHELF_TITLE_MIN_PX,
+            SHELF_TITLE_PX,
         );
-        text::draw_centred(&mut rgba, SHELF_TITLE_W, SHELF_TITLE_H, &layout, ink());
+        let w = l
+            .lines
+            .first()
+            .map(|line| text::line_width(font, line, l.px, l.tracking))
+            .unwrap_or(0.0);
+        face_w = (w.ceil() as u32).max(SHELF_TITLE_W);
+        layout = Some(l);
+    }
+    let mut rgba = vec![0u8; (face_w * SHELF_TITLE_H * 4) as usize];
+    if let Some(layout) = layout {
+        text::draw_centred(&mut rgba, face_w, SHELF_TITLE_H, &layout, plate_ink());
     }
     UndoFace {
         rgba,
-        w: SHELF_TITLE_W,
+        w: face_w,
         h: SHELF_TITLE_H,
     }
 }

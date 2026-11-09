@@ -1,18 +1,29 @@
 use slot_ui::{
-    ff_badge, icon_face, Draw, FfState, Hud, HudKind, Icon, Toast, OUT_H, OUT_W, PLATE_H, PLATE_Y,
+    ff_badge, icon_face, Draw, FfState, Hud, HudKind, Icon, Plate, Toast, OUT_H, OUT_W, PLATE_H,
+    PLATE_Y,
     TOP_BAND_H,
 };
 
 fn top_edge(d: &Draw) -> Option<f32> {
     match *d {
-        Draw::Rect { y, .. } | Draw::Tex { y, .. } | Draw::Turned { y, .. } => Some(y),
+        Draw::Rect { y, .. }
+        | Draw::Tex { y, .. }
+        | Draw::Turned { y, .. }
+        | Draw::Yaw { y, .. }
+        | Draw::Glyph { y, .. }
+        | Draw::Foil { y, .. } => Some(y),
         Draw::Game | Draw::Glow | Draw::Shot { .. } => None,
     }
 }
 
 fn bottom_edge(d: &Draw) -> Option<f32> {
     match *d {
-        Draw::Rect { y, h, .. } | Draw::Tex { y, h, .. } | Draw::Turned { y, h, .. } => Some(y + h),
+        Draw::Rect { y, h, .. }
+        | Draw::Tex { y, h, .. }
+        | Draw::Turned { y, h, .. }
+        | Draw::Yaw { y, h, .. }
+        | Draw::Glyph { y, h, .. }
+        | Draw::Foil { y, h, .. } => Some(y + h),
         Draw::Game | Draw::Glow | Draw::Shot { .. } => None,
     }
 }
@@ -22,7 +33,7 @@ fn fill(kind: HudKind, value: u8) -> f32 {
     let mut h = Hud::new();
     h.show(kind, value, false, 0);
     let mut out = Vec::new();
-    h.draw(0, 0.0, &mut out);
+    h.draw(0, 0.0, Plate::full(), &mut out);
     match out.last().expect("no bar in the list") {
         Draw::Rect { w, .. } => *w,
         _ => panic!("the bar must be a rect"),
@@ -60,7 +71,7 @@ fn the_hud_sits_at_the_top_of_the_screen() {
     let mut h = Hud::new();
     h.show(HudKind::Volume, 50, false, 0);
     let mut out = Vec::new();
-    h.draw(0, 0.0, &mut out);
+    h.draw(0, 0.0, Plate::full(), &mut out);
     let lowest = out.iter().filter_map(bottom_edge).fold(0.0f32, f32::max);
     assert!(
         lowest < OUT_H as f32 / 2.0,
@@ -81,7 +92,7 @@ fn the_plate_hangs_under_the_letter_band() {
     let mut h = Hud::new();
     h.show(HudKind::Volume, 50, false, 0);
     let mut out = Vec::new();
-    h.draw(0, PLATE_Y, &mut out);
+    h.draw(0, PLATE_Y, Plate::full(), &mut out);
 
     let top = out.iter().filter_map(top_edge).fold(f32::MAX, f32::min);
     assert!(
@@ -113,7 +124,7 @@ fn the_plate_hangs_under_the_letter_band() {
     let mut toast = Vec::new();
     let mut h = Hud::new();
     h.toast(Toast::StateSaved, 0);
-    h.draw(0, PLATE_Y, &mut toast);
+    h.draw(0, PLATE_Y, Plate::full(), &mut toast);
     let t = toast.iter().filter_map(top_edge).fold(f32::MAX, f32::min);
     assert!(
         (t - PLATE_Y).abs() < 0.01,
@@ -127,7 +138,7 @@ fn the_hud_draws_a_dark_plate_behind_itself() {
     let mut h = Hud::new();
     h.show(HudKind::Brightness, 5, false, 0);
     let mut out = Vec::new();
-    h.draw(0, 0.0, &mut out);
+    h.draw(0, 0.0, Plate::full(), &mut out);
     let plate = out.first().expect("nothing drawn");
     let Draw::Rect { w, colour, .. } = plate else {
         panic!("first draw is not the plate")
@@ -170,7 +181,7 @@ fn an_empty_rewind_buffer_still_draws_an_empty_bar() {
     let mut h = Hud::new();
     h.show(HudKind::Rewind, 0, false, 0);
     let mut out = Vec::new();
-    h.draw(0, 0.0, &mut out);
+    h.draw(0, 0.0, Plate::full(), &mut out);
     assert!(
         out.len() >= 2,
         "the track disappeared when the buffer emptied"
@@ -219,7 +230,7 @@ fn the_badge_outlives_the_bar_timer_without_a_plate() {
     let mut h = Hud::new();
     h.set_ff(FfState::Latched);
     let mut out = Vec::new();
-    h.draw(60_000, 0.0, &mut out);
+    h.draw(60_000, 0.0, Plate::full(), &mut out);
     assert!(
         !out.iter()
             .any(|d| matches!(d, Draw::Rect { w, .. } if *w == OUT_W as f32)),
@@ -237,7 +248,7 @@ fn the_badge_leaves_when_fast_forward_stops() {
     h.set_ff(FfState::Held);
     h.set_ff(FfState::Off);
     let mut out = Vec::new();
-    h.draw(0, 0.0, &mut out);
+    h.draw(0, 0.0, Plate::full(), &mut out);
     assert!(out.is_empty(), "the plate outlived the fast forward");
 }
 
@@ -255,7 +266,7 @@ fn the_ff_badge_draws_no_plate_but_the_bar_still_does() {
     let mut badge_only = Hud::new();
     badge_only.set_ff(FfState::Held);
     let mut out = Vec::new();
-    badge_only.draw(60_000, 0.0, &mut out);
+    badge_only.draw(60_000, 0.0, Plate::full(), &mut out);
     assert_eq!(
         full(&out),
         0,
@@ -265,6 +276,79 @@ fn the_ff_badge_draws_no_plate_but_the_bar_still_does() {
     let mut with_bar = Hud::new();
     with_bar.show(HudKind::Volume, 50, false, 0);
     let mut out = Vec::new();
-    with_bar.draw(0, 0.0, &mut out);
+    with_bar.draw(0, 0.0, Plate::full(), &mut out);
     assert_eq!(full(&out), 1, "the bar lost the plate it is read against");
+}
+
+/// ★ 2026-11-03（六六）：「货架界面的 HUD 宽度缩到 360px，跟插卡位同框可能好看点；
+/// 高度加一点，两边改圆角」。
+///
+/// 这条钉的是三件事，任何一件被后来的改动抹掉都会红：板**就是**插口那个框、
+/// 比全屏相位那块高、两端确实做了圆角（圆角是 1px 行拼的，所以有内缩的窄行）。
+#[test]
+fn the_shelf_plate_is_the_slot_opening_with_round_ends() {
+    let plate = Plate::shelf();
+    assert_eq!(plate.x, slot_ui::SLOT_OPEN_X, "the plate must start at the slot's left edge");
+    assert_eq!(plate.w, slot_ui::SLOT_OPEN_W, "the plate must be the slot's own width");
+    assert_eq!(
+        plate.h,
+        slot_ui::SLOT_OPEN_H,
+        "the plate lives inside the opening, so it is the opening's height"
+    );
+    assert!(plate.h > PLATE_H, "the shelf plate is meant to be taller than the full-width one");
+    assert!(plate.radius > 0.0, "the shelf plate is meant to have round ends");
+
+    let mut h = Hud::new();
+    h.show(HudKind::Volume, 8, false, 0);
+    let mut out = Vec::new();
+    // ★ 2026-11-03（六六）：「放插卡位是不是更自然？」—— 板从插口上沿开始，住进口里。
+    let top = slot_ui::SLOT_OPEN_Y;
+    h.draw(0, top, plate, &mut out);
+    assert_eq!(
+        top + plate.h,
+        slot_ui::SLOT_OPEN_Y + slot_ui::SLOT_OPEN_H,
+        "the plate's bottom edge sits on the opening's lower edge"
+    );
+
+    // The plate itself is opaque: the shelf's sits over the opening, and a veil would let the
+    // cart and its lit face read through the numbers. The straight middle band is the rect the
+    // rounded box is built around, so it carries the plate's colour.
+    let plate_rect = out
+        .iter()
+        .find_map(|d| match *d {
+            Draw::Rect { x, w, colour, .. }
+                if (x - plate.x).abs() < 0.01 && (w - plate.w).abs() < 0.01 =>
+            {
+                Some(colour)
+            }
+            _ => None,
+        })
+        .expect("the plate must be drawn");
+    assert_eq!(
+        plate_rect[3], 1.0,
+        "the shelf plate's backing must be opaque"
+    );
+
+    // Nothing the HUD draws may leave the plate: on 360 px the bar and its glyph are the
+    // things that would spill first if the layout kept its full-width numbers.
+    for d in &out {
+        if let Draw::Rect { x, w, .. } = *d {
+            assert!(x >= plate.x - 0.01, "a rect starts left of the plate: {x}");
+            assert!(
+                x + w <= plate.right() + 0.01,
+                "a rect runs past the plate: {}",
+                x + w
+            );
+        }
+    }
+
+    // The rounded ends are trimmed rows, not a second shape.
+    let inset_rows = out
+        .iter()
+        .filter(|d| matches!(d, Draw::Rect { w, h, .. } if *h <= 1.0 && *w < plate.w - 1.0))
+        .count();
+    assert!(
+        inset_rows >= 12,
+        "the ends should be laid in inset rows, got {inset_rows}"
+    );
 }

@@ -50,7 +50,7 @@ fn the_number_ends_exactly_at_the_anchor() {
         at(68, Charge::Discharging),
         percent_face(),
         None,
-        &mut out,
+        &mut out, 1.0,
     );
     let (x, y, w, h) = number_quad(&out).expect("the percent was not drawn");
     assert!(
@@ -76,7 +76,7 @@ fn nothing_moves_when_the_charge_state_changes() {
         at(68, Charge::Discharging),
         percent_face(),
         None,
-        &mut idle,
+        &mut idle, 1.0,
     );
     draw_gauge(
         RIGHT,
@@ -84,7 +84,7 @@ fn nothing_moves_when_the_charge_state_changes() {
         at(68, Charge::Charging),
         percent_face(),
         Some(TexId::from_raw(7)),
-        &mut charging,
+        &mut charging, 1.0,
     );
     assert_eq!(
         number_quad(&idle),
@@ -108,7 +108,7 @@ fn the_bolt_sits_left_of_the_number_and_never_reaches_it() {
         at(68, Charge::Charging),
         percent_face(),
         Some(TexId::from_raw(7)),
-        &mut out,
+        &mut out, 1.0,
     );
     let (nx, _, _, _) = number_quad(&out).expect("the percent was not drawn");
     let (bx, by, bw, bh) = out
@@ -143,7 +143,7 @@ fn the_bolt_is_only_drawn_while_charging() {
             at(68, charge),
             percent_face(),
             Some(TexId::from_raw(7)),
-            &mut out,
+            &mut out, 1.0,
         );
         out.iter()
             .any(|d| matches!(d, Draw::Tex { tex: t, .. } if *t == TexId::from_raw(7)))
@@ -167,7 +167,7 @@ fn nothing_is_drawn_before_the_face_lands() {
         at(68, Charge::Charging),
         Printed::default(),
         Some(TexId::from_raw(7)),
-        &mut out,
+        &mut out, 1.0,
     );
     assert!(
         out.is_empty(),
@@ -179,7 +179,7 @@ fn nothing_is_drawn_before_the_face_lands() {
 #[test]
 fn no_reading_draws_nothing() {
     let mut out = Vec::new();
-    draw_gauge(RIGHT, TOP, None, percent_face(), None, &mut out);
+    draw_gauge(RIGHT, TOP, None, percent_face(), None, &mut out, 1.0);
     assert!(out.is_empty());
 }
 
@@ -194,7 +194,7 @@ fn a_longer_reading_still_ends_at_the_anchor() {
             at(100, Charge::Discharging),
             Printed { face: None, w },
             None,
-            &mut out,
+            &mut out, 1.0,
         );
         let (x, _, drawn, _) = number_quad(&out).expect("the percent was not drawn");
         assert!(

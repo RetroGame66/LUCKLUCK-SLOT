@@ -1,38 +1,26 @@
-use slot_gfx::{Draw, TexId, OUT_W};
+use slot_gfx::{Draw, TexId, OUT_H};
 use slot_power::Battery;
 
-use crate::battery::{cluster_h, draw_gauge};
-use crate::icon::icon_box;
-use crate::plate::STATUS_H;
-use crate::slot_chrome::TOP_BAND_H;
+use crate::battery::draw_battery_icon;
+use crate::plate::{plate_battery_x, plate_mark_y, STATUS_H, PLATE_MARK};
+use crate::slot_chrome::MOUTH_H;
 
-/// Where the status line stands in the band: the clock's own top edge, with the mode badge
-/// centred on the same line.
-///
-/// Measured off the band and not off the screen's edge, because both readings are printed on the
-/// plastic rather than on the panel. This is the mirror of the place the line had when it was
-/// drawn at the bottom of the case, and there it was measured off the cart bay for the same
-/// reason.
-///
-/// Both ends are now the same band: `cluster_h()` is `STATUS_H`, so the gauge's own centring
-/// `(TOP_BAND_H - cluster_h()) / 2` lands on this same number and the two ends cannot drift.
-/// That is the whole reason the battery's cluster height is still a function rather than a bare
-/// constant — one place decides, both ends read it.
-const STATUS_Y: f32 = (TOP_BAND_H - STATUS_H as f32) / 2.0;
+/// The bottom band's top edge. The clock still prints on the **bottom** band (2026-10-23 六六：
+/// 移进黑条内、不再贴最左边框), while the battery moved to the top-right corner.
+const BAND_Y: f32 = OUT_H as f32 - MOUTH_H;
 
-/// Blank at each end. Matches the gap the row leaves beside the outer carts, so what is printed
-/// on the case lines up with what is above it.
-const STATUS_MARGIN: f32 = 24.0;
+/// Where the clock stands in the bottom band: its own top edge, centred in the band's height.
+const STATUS_Y: f32 = BAND_Y + (MOUTH_H - STATUS_H as f32) / 2.0;
 
-/// Between the clock and the mode badge beside it. The badge is placed off the clock's own width
-/// and not off the screen's edge, so a clock that gains a digit pushes the badge along rather
-/// than being sat on by it.
-const BADGE_GAP: f32 = 10.0;
+/// ★ 2026-10-24（六六）：「时间移至**左下角区域居中**」——
+/// 底条的左段是「左边框到插卡位洞的左沿」这一块（0..`slot_chrome::SLOT_X0`），时钟在
+/// 这块里水平居中，而不是贴着一个固定 x 左对齐。
+const CLOCK_ZONE: (f32, f32) = (0.0, 180.0);
 
-/// The mode badge's box. The face is rasterised once, at `HUD_ICON_PX`, and drawn at the size it
-/// was baked at; the sun and the moon are the one pair that must stay the same size as each
-/// other, which they do by both being this.
-const BADGE_PX: f32 = crate::hud::HUD_ICON_PX;
+/// The top band's top edge, and the right margin the battery anchors to — the battery reads in
+/// the top-right corner, shrunk to 60% (2026-10-23 六六).
+// ★ 2026-10-24（六六）：电量从"右上角百分比"改成"名称栏右段 30px 里的竖电池图标"，
+//   所以这两个锚点退役（位置改由 `plate::plate_battery_x/plate_mark_y` 给）。
 
 /// A line of type and the width it rasterised to. The width cannot be recovered from a
 /// `TexId`, and only the compositor can mint one, so the space is held from the width alone
@@ -52,47 +40,34 @@ impl Printed {
     }
 }
 
-/// The clock at the left end of the top band and the battery at the right, both on the case's
-/// own plastic.
-///
-/// The clock takes the left and the gauge the right, at the same margin, because a right-handed
-/// reading of a status line puts the number first and the icon it belongs to last, and because
-/// the number the battery carries is what the eye is looking for — the capsule is there to be
-/// recognised at a glance, not read. The gauge is right-anchored with its number to the left of
-/// it, so a clock that grows a character moves nothing else on the band and a percent that
-/// gains a digit pushes only itself outward.
-///
-/// These two used to sit at the bottom of the case, on a band the cart bay now owns alone: the
-/// bay is where the cart goes in and out of, and everything printed on it competed with the one
-/// thing on the screen that moves.
+/// The status line, reprinted after the 2026-10-23（六六）rework: the clock stays on the
+/// **bottom** band but moves in off the left frame (`CLOCK_X`), and the battery moved to the
+/// **top**-right corner at 60% (`TOP_Y` / `TOP_MARGIN`). The theme dark/light badge and the
+/// machine badge are both gone.
 pub fn draw_status(
     battery: Option<Battery>,
     percent: Printed,
     bolt: Option<TexId>,
     clock: Printed,
-    mode: Option<TexId>,
+    _mode: Option<TexId>,
     out: &mut Vec<Draw>,
 ) {
-    draw_printed(STATUS_MARGIN, STATUS_Y, clock, STATUS_H, out);
-    // The mode badge rides the clock's own width, so the two travel together and a clock that
-    // gains a digit pushes the badge along rather than sitting on top of it. Nothing is drawn
-    // until the clock's face has landed: a badge that arrived first would jump sideways the
-    // moment the time appeared, and the clock is the one reading on this row whose width is not
-    // fixed.
-    if let Some(tex) = mode.filter(|_| clock.w > 0) {
-        let (w, h) = icon_box(BADGE_PX);
-        let (w, h) = (w as f32, h as f32);
-        out.push(Draw::Tex {
-            x: STATUS_MARGIN + clock.w as f32 + BADGE_GAP,
-            y: STATUS_Y + (STATUS_H as f32 - h) / 2.0,
-            w,
-            h,
-            tex,
-            alpha: 1.0,
-        });
-    }
-    let y = (TOP_BAND_H - cluster_h()) / 2.0;
-    draw_gauge(OUT_W as f32 - STATUS_MARGIN, y, battery, percent, bolt, out);
+    // ★ 2026-10-23（六六）：时钟留在底条黑条内（CLOCK_X，解决「偏左」）；电量挪到顶条右上角并
+    //   缩到 60%；主题暗/亮指示图标（_mode）与机种指示均移除。
+    // 时钟在左段居中：宽度从面本身来，所以居中不会随字号/位数漂。
+    let clock_w = if clock.w == 0 { 0.0 } else { clock.w as f32 };
+    let clock_x = (CLOCK_ZONE.0 + CLOCK_ZONE.1) / 2.0 - clock_w / 2.0;
+    draw_printed(clock_x, STATUS_Y, clock, STATUS_H, out);
+    // 电量：名称栏右段（30px 区）里 24px 的竖电池图标，不印数字。
+    let _ = percent;
+    draw_battery_icon(
+        plate_battery_x(),
+        plate_mark_y(),
+        PLATE_MARK,
+        battery,
+        bolt,
+        out,
+    );
 }
 
 /// A line of type at an arbitrary `y`. The placeholder is what holds the space while the

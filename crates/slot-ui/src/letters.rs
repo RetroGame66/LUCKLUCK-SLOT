@@ -85,7 +85,12 @@ const SCALE: f32 = 0.8;
 const PITCH: f32 = 30.0 * SCALE;
 
 /// Slots drawn either side of the marker.
-const VISIBLE: i32 = 4;
+///
+/// ★ **2026-10-23（六六）：改为 2。** 货架页桌面图（System/Desktop.png）底部那条黑带上
+/// 留给字母轮的是一块洋红药丸，实测 x569–664 / y442–467（宽 96px、中心 cx616.5 / cy454.5）。
+/// `PITCH=30*SCALE=24px`，**2 个候选每侧 + 中间 = 5 槽、4 个间距 = 96px**，刚好塞进药丸；
+/// 原来 4 个每侧（192px）会溢出。这是"上机实测再微调"的微调点，若六六改了药丸尺寸再来动这里。
+const VISIBLE: i32 = 2;
 
 /// Where the strip starts giving up its light, and where it has none left, in pixels from the
 /// middle.
@@ -113,19 +118,27 @@ const FADE_TO: f32 = 4.5 * PITCH;
 /// thirty-six, three clear at each end.
 const MODULE_H: f32 = crate::slot_chrome::TOP_WIN_H - 2.0 * RIDGE_INSET;
 
-/// Where the widget's middle is: the middle of the *band*, not of the window.
+/// Where the widget's middle is: the middle of the **bottom** band, not of the top one.
 ///
-/// The window is not centred in the band — it stands twelve pixels down from the top of a
-/// fifty-eight pixel band and ten up from the bottom — so a strip centred on the window reads as
-/// sitting low in the case, which is what it looked like. The band is the thing the eye sees as
-/// one object, so the band is what the strip is centred on.
+/// ★ **2026-10-22（六六）：字母轮从顶条挪到底条。** 底条 = 卡座那一条（`MOUTH_H` 高，
+/// 贴屏幕底边），它自己就是机器的一截塑料，所以字母轮照旧居中在这条塑料的几何中心 —— 跟
+/// 当年在顶条上"以条为准、不以窗为准"是同一个道理，只是条换成了底条。
 ///
-/// This is also what keeps the lip honest without a nudge. The old strip carried a three pixel
-/// lift purely to get its ink off that line, because centred on the window's middle it was
-/// closer to the bottom of the opening than to the top. Centred on the band, the bottom of the
-/// widget lands at 44 against a lip at 56 — twelve clear, the same margin the lip test asks of
-/// the letters — so the lift has nothing left to do and is gone.
-const MODULE_MID: f32 = crate::slot_chrome::TOP_BAND_H / 2.0;
+/// ★ **2026-10-23（六六）：改为对齐桌面图洋红药丸的垂直中心。** 实测药丸 y442–467，
+/// 中心 **454.5**；本常量直接钉到它，字母轮就落在药丸里。改了药丸高度再来动这里。
+const MODULE_MID: f32 = 454.5;
+
+/// The strip's own centre in the *horizontal*, relative to the screen's.
+///
+/// ★ **2026-10-22（六六）：底条上「插卡位右、黄星左」。** 卡座的开口在屏幕正中，黄星在底条
+/// 右角，字母轮夹在两者之间 —— 所以它不再是屏幕正中，而是向右偏。
+///
+/// ★ **2026-10-23（六六）：改为对齐桌面图洋红药丸的水平中心 616.5**（药丸 x569–664）。
+/// 之前初值 560 是"大概值、上机再微调"；现在桌面图把位置定死了，直接钉到药丸中心。
+/// ★ 2026-10-24（六六）：「视觉上并不居中，胶囊两侧应该与两边的边缘距离相等」——
+/// 右边这一段的**左界是插卡位右壁的外沿（546）**、右界是屏幕右缘（720），中点 **633**。
+/// 原先的 616.5 是照着旧的洋红药丸量的，落在这一段里偏左 16.5，左右留白 7 / 40。
+const STRIP_CX: f32 = 633.0;
 
 /// The ring's spring. Snappier than the cart row's: a strip is a small thing, and a letter that
 /// took as long to arrive as a cartridge does would not read as an index being stepped through.
@@ -140,11 +153,14 @@ const REPEAT_DELAY_MS: Millis = 450;
 /// the whole alphabet should be a couple of seconds away rather than twenty.
 const REPEAT_MS: Millis = 130;
 
-/// The ink a letter is drawn in. The palette's, because the window it is set on is the case's
-/// `opening` and that flips with the mode — a fixed light ink would be dark type's background in
-/// one mode and its own colour in the other.
+/// The ink a letter is drawn in. **The palette's `pill_ink`**, not its `ink`.
+///
+/// ★ 2026-10-24（六六）：「字母轮不显示」。胶囊按定稿填 `deepest()`，而 `deepest()` 在亮色
+/// 主题下**就是 `ink`** —— 字母再画 `ink` 就是深字压同一块深色药丸，实测 **1.00:1**，
+/// 只剩那条药丸、字母一个不剩（暗色下 18.83:1，所以从来没人发现）。
+/// `pill_ink` 在这块面上取读得出来的那个色：亮色落到 `bg`（纸），暗色仍是 `ink`（零回归）。
 fn ink() -> [u8; 3] {
-    crate::palette::ink()
+    crate::palette::pill_ink()
 }
 
 /// The size a letter is rasterised at, before it is cropped to its ink and scaled to one of
@@ -152,7 +168,8 @@ fn ink() -> [u8; 3] {
 ///
 /// Larger than either of them on purpose: the face is built once and drawn at both, so it has
 /// to be whichever is bigger, and drawing down is the direction that keeps an edge clean.
-pub const FACE_PX: f32 = 40.0;
+/// ★ 2026-10-24（六六）：「字母轮缩小 2px 字号」—— 40 → 38。
+pub const FACE_PX: f32 = 38.0;
 
 /// The cap height a letter is drawn at: the marker's, and its neighbours'.
 ///
@@ -265,12 +282,84 @@ pub fn letter_face(ch: char) -> CartFace {
 /// shadowed half. What is gone is the depth — flat, every ridge is drawn at its full width and
 /// full alpha rather than scaled by how far the drum has turned — which is what the letters
 /// gave up when they were laid flat too.
-pub fn ridge_face() -> CartFace {
-    let (w, h) = (RIDGE_W, MODULE_H.round() as u32);
+/// ★ 2026-10-24（六六）：「加多一个**胶囊形状的背板**」——字母轮底下垫一块两端半圆的
+/// 塑料，字才读得出是"印在一块牌上"，而不是浮在黑条里。
+///
+/// ★ 2026-10-24（六六）：「字母轮得**嵌进去**，胶囊按最深色」——
+/// 宽 = 直段 4 个槽距（96）+ 两端各一个半圆（半径 `MODULE_H/2`）= 126，字因此落在胶囊**里**；
+/// 颜色取 `palette::deepest()`（深色主题→黑、亮色主题→墨），读作一个凹槽而不是一块亮牌。
+pub const PILL_W: f32 = PITCH * (VISIBLE * 2) as f32 + MODULE_H;
+
+/// 胶囊在屏幕上的位置 `(x, y, w, h)`：水平钉在字母轮的 `STRIP_CX`、竖直钉在 `MODULE_MID`，
+/// 所以它和字母永远同一个中心。
+pub fn pill_quad() -> (f32, f32, f32, f32) {
+    let h = MODULE_H;
+    (STRIP_CX - PILL_W / 2.0, MODULE_MID - h / 2.0, PILL_W, h)
+}
+
+pub fn pill_face() -> CartFace {
+    let (w, h) = (PILL_W.round() as u32, MODULE_H.round() as u32);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let c = crate::palette::pill_fill();
+    // 次底色：填充往墨色走 22%（深色主题是黑→灰，亮色主题是墨→浅）。
+    let ink = crate::palette::ink();
+    let ring: [u8; 3] = std::array::from_fn(|i| {
+        (c[i] as f32 + (ink[i] as f32 - c[i] as f32) * 0.22).round() as u8
+    });
+    let r = h as f32 / 2.0;
+    for y in 0..h {
+        for x in 0..w {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            // 中心线是一段竖直线段：两端各补一个半圆，合起来就是胶囊。
+            let cx = px.clamp(r, w as f32 - r);
+            let d = ((px - cx).powi(2) + (py - r).powi(2)).sqrt();
+            let a = (r - d + 0.5).clamp(0.0, 1.0);
+            if a <= 0.0 {
+                continue;
+            }
+            // ★ 2026-10-24（六六）：「胶囊加多一圈**次底色**的镶边」—— 最外 1px 用比填充
+            //   亮一档的色（填充 ← 往墨色走 22%），胶囊才读作嵌进去的凹槽，而不是一块贴上去的
+            //   黑片。
+            let inside = r - d;
+            let px_col = if inside <= 1.0 { ring } else { c };
+            let i = ((y * w + x) * 4) as usize;
+            rgba[i] = px_col[0];
+            rgba[i + 1] = px_col[1];
+            rgba[i + 2] = px_col[2];
+            rgba[i + 3] = (a * 255.0).round() as u8;
+        }
+    }
+    CartFace { rgba, w, h }
+}
+
+/// 棱（金属齿）的颜色 —— `ridge_ink()` 在亮色主题下要先过一道"看得见"的检查。
+///
+/// ★ 2026-10-24：和字母轮是同一个根因。胶囊填 `deepest()`，亮色主题下那是 `ink`；
+/// 而 `ridge_ink()` 在亮色主题下取 ramp 的 `bright`。GB 那套的 `bright` 与 `text` 是**同一个
+/// 颜色**（`[15,56,15]`）⇒ 棱压在胶囊上**实测 1.00:1**，整条齿一个也看不见；PAPER 1.32、
+/// SEPIA 1.49，其余 1.0–2.4 —— 亮色七套里**没有一套**的棱是清楚的。
+///
+/// 所以这里不改 `ridge_ink()` 本身（它是"金属"这件事的语义，暗色主题的 14.21:1 靠它），
+/// 只加一道判据：**棱和胶囊对比不足 1.6:1 时，改用 `pill_ink()`**（与字母同一族，
+/// 只是 alpha 仍压在 `RIDGE_PEAK` 之下，所以它还是"字后面的金属"而不是另一档字）。
+///
+/// 暗色主题不受影响：那里 `ridge_ink()` 与胶囊 `ground` 的对比是 14.21:1。
+fn metal_ink() -> [u8; 3] {
+    let metal = crate::palette::ridge_ink();
+    let pill = crate::palette::pill_fill();
+    if crate::palette::contrast(metal, pill) < 1.6 {
+        crate::palette::pill_ink()
+    } else {
+        metal
+    }
+}
+
+pub fn ridge_face() -> CartFace {    let (w, h) = (RIDGE_W, MODULE_H.round() as u32);
     let mut rgba = vec![0u8; (w * h * 4) as usize];
     let (fw, fh) = (w as f32, h as f32);
     let mid = fw / 2.0;
-    let metal = crate::palette::ridge_ink();
+    let metal = metal_ink();
     // How far down the ridge the boss ends and the crest starts.
     let boss = 7.0;
     for y in 0..h {
@@ -509,10 +598,9 @@ impl Letters {
         counts: &[usize; N],
         out: &mut Vec<Draw>,
     ) {
-        let cx = crate::draw::OUT_W as f32 / 2.0;
-        // Where the widget's middle is: the middle of the band. Not the middle of the window —
-        // the window is not centred in the band — and not the window less a nudge either; both
-        // of those are what `MODULE_MID` is written out to replace.
+        // ★ 2026-10-22：底条上字母轮不再是屏幕正中，而是向右偏（`STRIP_CX`）夹在卡座与黄星间。
+        let cx = STRIP_CX;
+        // Where the widget's middle is: the middle of the bottom band (see `MODULE_MID`).
         let mid = MODULE_MID;
         // Where the strip is between two slots. Everything below is a function of a slot's
         // distance from the marker, and the fraction is what lets a slot be caught midway
@@ -541,7 +629,10 @@ impl Letters {
         // marker, which is ten ridges for nine letters, and one past each end so the strip
         // visibly carries on rather than stopping at the last thing it can name.
         if let Some((tex, rw, rh)) = ridge {
-            for boundary in -VISIBLE..=VISIBLE + 1 {
+            // ★ 2026-10-24（六六）：「字母轮两侧的棱拿掉，才像镶嵌在胶囊里的齿轮」——
+            //   原来从 -VISIBLE 画到 VISIBLE+1（6 条），最外两条落在胶囊的半圆端之外。
+            //   现在只画字母**之间**那 4 条，全部落在胶囊的直段里。
+            for boundary in -VISIBLE + 1..=VISIBLE {
                 let off = boundary as f32 - 0.5 - frac;
                 let fade = metal_fade(off);
                 if fade <= 0.0 {

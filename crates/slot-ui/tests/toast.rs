@@ -1,6 +1,6 @@
 use slot_ui::lang;
 use slot_ui::text::{missing_in, set_font};
-use slot_ui::{toast_face, toast_rect, Draw, Hud, HudKind, Toast, OUT_W, PLATE_H};
+use slot_ui::{toast_face, toast_rect, Draw, Hud, HudKind, Plate, Toast, OUT_W, PLATE_H};
 
 /// The face the app loads off the card at boot, by the path the deploy puts it at.
 ///
@@ -85,7 +85,7 @@ fn a_toast_sits_in_the_plate_band_and_is_backed_by_it() {
     let mut out = Vec::new();
     // From the top of the screen: this is checking where the toast sits inside its plate, not
     // where the plate hangs, which `hud.rs` covers.
-    h.draw(0, 0.0, &mut out);
+    h.draw(0, 0.0, Plate::full(), &mut out);
 
     let plate = out
         .iter()
@@ -111,12 +111,12 @@ fn a_toast_takes_the_band_from_the_bar() {
     let mut h = Hud::new();
     h.show(HudKind::Volume, 50, false, 0);
     let mut bar_only = Vec::new();
-    h.draw(0, 0.0, &mut bar_only);
+    h.draw(0, 0.0, Plate::full(), &mut bar_only);
     let bars = bar_only.len();
 
     h.toast(Toast::StateSaved, 0);
     let mut both = Vec::new();
-    h.draw(0, 0.0, &mut both);
+    h.draw(0, 0.0, Plate::full(), &mut both);
     assert!(
         both.len() < bars,
         "the bar is still drawn underneath the toast"

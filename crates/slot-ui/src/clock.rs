@@ -118,6 +118,23 @@ impl ClockPicker {
         }
     }
 
+    /// The picker as a **setting** rather than as a first launch: the fields are the time on the
+    /// wall and the offset is the one already on the card, so opening it and confirming it
+    /// without touching anything gives back exactly the `utc` it was handed.
+    ///
+    /// ★ Why this is a second constructor and not `from_secs` with a different argument
+    /// （2026-10-10，机器上调整日期时间）：`from_secs` seeds the fields from a `utc` and leaves the
+    /// offset at zero, which is right at a boot — there is nothing on the card yet to know. Once
+    /// there *is* an offset, seeding that way would show the user UTC and make them re-pick their
+    /// timezone every time they only wanted to correct the clock. Both the fields **and** the
+    /// offset have to come off the same answer, and `secs()` is `local − offset`, so handing it
+    /// local time and the offset gives back the utc unchanged.
+    pub fn local(utc: i64, offset_min: i64) -> Self {
+        let mut picker = ClockPicker::from_secs(utc + offset_min * 60);
+        picker.offset_min = offset_min;
+        picker
+    }
+
     /// UTC, which is what the card keeps. The fields are the time on the wall, so the offset
     /// that turns one into the other comes back off here.
     pub fn secs(&self) -> i64 {

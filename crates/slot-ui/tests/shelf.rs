@@ -1,9 +1,55 @@
 use slot_power::{Battery, Charge};
 use slot_store::Cart;
 use slot_ui::{
-    cluster_h, draw_status, label_colour, Draw, Printed, Shelf, TexId, CART_W, CENTER_SCALE, OUT_W,
+    cluster_h, draw_status, label_colour, Draw, Idle, Printed, Shelf, TexId, CART_W, CENTER_SCALE,
+    OUT_W,
     STATUS_H, TOP_BAND_H,
 };
+
+/// A machine folder spelled one of the ways `System::from_dir` also takes (`NES` for `FC`,
+/// `SNES` for `SFC`) is still that machine's own folder, not a subfolder inside it. Matching
+/// the canonical name alone files every rom under a folder named after its own machine, and
+/// the whole shelf then sits behind a subfolder switch nobody picked.
+#[test]
+fn an_aliased_machine_folder_is_not_a_subfolder() {
+    let s = Shelf::new(vec![
+        Cart {
+            initial: 'S',
+            stem: "SMB".into(),
+            rom: "Games/NES/SMB.nes".into(),
+            label: None,
+            art: None,
+            code: String::new(),
+            cgb: 0,
+            title: "SUPER MARIO BROS".into(),
+        },
+        Cart {
+            initial: 'Z',
+            stem: "Zelda".into(),
+            rom: "Games/SNES/Zelda.smc".into(),
+            label: None,
+            art: None,
+            code: String::new(),
+            cgb: 0,
+            title: "ZELDA".into(),
+        },
+        Cart {
+            initial: 'F',
+            stem: "Real".into(),
+            rom: "Games/Favorites/Real.gba".into(),
+            label: None,
+            art: None,
+            code: String::new(),
+            cgb: 0,
+            title: "REAL".into(),
+        },
+    ]);
+    // Both aliased folders read as their machine's own shelf, so nothing is hidden.
+    assert_eq!(s.machine_view(slot_store::System::Fc).len(), 1);
+    assert_eq!(s.machine_view(slot_store::System::Sfc).len(), 1);
+    // A folder that names no machine really is a subfolder, and stays behind the switch.
+    assert_eq!(s.machine_view(slot_store::System::Gba).len(), 0);
+}
 
 fn shelf_with(n: usize) -> Shelf {
     Shelf::new(
@@ -13,7 +59,9 @@ fn shelf_with(n: usize) -> Shelf {
                 stem: format!("Game {i}"),
                 rom: format!("Games/Game {i}.gba").into(),
                 label: None,
+                art: None,
                 code: String::new(),
+                cgb: 0,
                 title: format!("GAME {i}"),
             })
             .collect(),
@@ -28,6 +76,10 @@ fn placed(s: &Shelf) -> Vec<(f32, f32)> {
             Draw::Rect { x, w, .. } => (x, w),
             Draw::Tex { x, w, .. } => (x, w),
             Draw::Turned { x, w, .. } => (x, w),
+            Draw::Yaw { x, w, .. } => (x, w),
+            // The card's marks are quads with their own geometry, placed against a cart —
+            // the same reading as a face, not a marker on the list.
+            Draw::Glyph { x, w, .. } | Draw::Foil { x, w, .. } => (x, w),
             Draw::Game | Draw::Glow | Draw::Shot { .. } => (0.0, OUT_W as f32),
         })
         .collect()
@@ -35,7 +87,12 @@ fn placed(s: &Shelf) -> Vec<(f32, f32)> {
 
 fn xw(d: &Draw) -> (f32, f32) {
     match *d {
-        Draw::Rect { x, w, .. } | Draw::Tex { x, w, .. } | Draw::Turned { x, w, .. } => (x, w),
+        Draw::Rect { x, w, .. }
+        | Draw::Tex { x, w, .. }
+        | Draw::Turned { x, w, .. }
+        | Draw::Yaw { x, w, .. }
+        | Draw::Glyph { x, w, .. }
+        | Draw::Foil { x, w, .. } => (x, w),
         Draw::Game | Draw::Glow | Draw::Shot { .. } => (0.0, OUT_W as f32),
     }
 }
@@ -44,6 +101,36 @@ fn settle(s: &mut Shelf) {
     for _ in 0..600 {
         s.update(1.0 / 60.0);
     }
+}
+
+/// ★★ 2026-10-28（六六第二次报同一件事）：「换了壁纸才发现又犯了一个老问题：货架上的卡带是
+/// 半透明的」。
+///
+/// 侧位的 `alpha` 就是**壁纸能透出来的比例** —— 它是合成的账，不是"把卡压暗"的旋钮。底是黑的
+/// 时候两者恰好等价（`0.7×卡面 + 0.3×黑`），这张脸七个月都被当成压暗在用；换成亮壁纸那天，
+/// 同一个 0.3 就原形毕露。所以这条钉的是**泄漏量**，不是那个具体数字。
+#[test]
+fn a_side_cart_does_not_let_the_wallpaper_read_through() {
+    let s = shelf_with(5);
+    let rects = s.slot_rects(None, 0.0, 0.0);
+    let side: Vec<f32> = rects
+        .iter()
+        .filter(|r| !r.selected)
+        .map(|r| r.alpha)
+        .collect();
+    assert!(!side.is_empty(), "一个侧位都没有，这条测不到东西");
+    for a in side {
+        assert!(
+            (1.0 - a) <= 0.12,
+            "侧位卡让 {:.0}% 的壁纸透出来 —— 换上一张亮壁纸就又是「半透明」",
+            (1.0 - a) * 100.0
+        );
+    }
+    // 中位那张仍然是整张面。
+    assert!(
+        rects.iter().any(|r| r.selected && (r.alpha - 1.0).abs() < 1e-6),
+        "中位卡不是满不透明"
+    );
 }
 
 /// Which cart each quad in the row belongs to. No faces are uploaded, so every cart draws
@@ -577,7 +664,10 @@ fn cart_spans(out: &[Draw]) -> Vec<(f32, f32)> {
         .filter_map(|d| match *d {
             Draw::Rect { x, w, h, .. }
             | Draw::Tex { x, w, h, .. }
-            | Draw::Turned { x, w, h, .. } => (h > 60.0).then_some((x, x + w)),
+            | Draw::Turned { x, w, h, .. }
+            | Draw::Yaw { x, w, h, .. }
+            | Draw::Glyph { x, w, h, .. }
+            | Draw::Foil { x, w, h, .. } => (h > 60.0).then_some((x, x + w)),
             Draw::Game | Draw::Glow | Draw::Shot { .. } => None,
         })
         .filter(|(x0, x1)| *x1 > 0.0 && *x0 < OUT_W as f32)
@@ -618,13 +708,14 @@ fn the_row_parts_for_the_cart_going_in() {
     );
 }
 
-/// Dimming darkens a side cart's face and leaves the black under it as the recede has it, so a
-/// dimmed cart reads as a cart in shadow rather than a ghost over the wallpaper.
+/// Dimming darkens a side cart's face — and **only** the face: nothing is drawn under it.
+///
+/// ★ 2026-10-25：这条原来还断言"垫在下面那块黑跟着 recede 走"。那块黑影已经整条删掉了
+/// （六六：「GBC 的阴影还没拿掉」），所以现在要钉的是**它确实不在了** ——
+/// 否则哪天有人手一抖把影子加回来，没有任何测试会响。
 #[test]
-fn dim_darkens_a_side_carts_face_and_not_the_black_under_it() {
+fn dim_darkens_a_side_carts_face_and_draws_nothing_under_it() {
     let mut s = shelf_with(3);
-    let shadow = TexId::from_raw(99);
-    s.set_shadow(shadow);
     let side = TexId::from_raw(11);
     s.set_faces(vec![
         Some(TexId::from_raw(10)),
@@ -643,23 +734,82 @@ fn dim_darkens_a_side_carts_face_and_not_the_black_under_it() {
             .expect("the side cart is not drawn");
         let under = out
             .iter()
-            .find_map(|d| match *d {
-                Draw::Tex {
-                    x: at, tex, alpha, ..
-                } if tex == shadow && at == x => Some(alpha),
-                _ => None,
+            .filter(|d| match **d {
+                Draw::Tex { x: at, tex, .. } => at == x && tex != side,
+                _ => false,
             })
-            .expect("nothing is drawn under the side cart");
-        (face, under)
+            .count();
+        assert_eq!(under, 0, "卡面底下不该再垫任何东西");
+        face
     };
-    let (face, under) = drawn(1.0);
-    let (dimmed, dimmed_under) = drawn(0.5);
+    let face = drawn(1.0);
+    let dimmed = drawn(0.5);
     assert!(
         (dimmed - face * 0.5).abs() < 1e-6,
         "the face went from {face} to {dimmed} at half dim"
     );
+}
+
+/// ★★ 2026-10-25（六六：「摆动看起来还是有点奇怪，能朝着玩家晃吗（就是轴是从卡带纵向穿过的，
+/// 卡带左右两侧交替往玩家方向摆）」）。
+///
+/// 这条钉住的是**用哪个图元**，不是角度多大 —— 角度是可以调的，而图元选错了
+/// 不管调多少度都是同一个观感：
+/// * `Draw::Turned` 在**屏幕平面**里转，卡带看起来像被拧了一下（就是六六说奇怪的那一版）；
+/// * `Draw::Yaw` 绕**穿过卡带的竖直轴**偏转，画出梯形，近的一侧更高更宽 ——
+///   读作"这卡立在桌上，正被左右转着看"。
+///
+/// 所以判据是：静置的中间卡必须是 `Draw::Yaw`，而且**全表里一个 `Turned` 都不能有**。
+#[test]
+fn the_selected_cart_turns_to_face_the_player_rather_than_spinning_flat() {
+    let mut s = shelf_with(5);
+    s.index = 2;
+    s.set_faces((0..5).map(|i| Some(TexId::from_raw(10 + i))).collect());
+
+    let mut out = Vec::new();
+    s.draw_row_idle(None, 0.0, 0.0, 1.0, Idle { yaw: 0.1, glow: 1.0 }, &mut out);
+
+    let yaws: Vec<f32> = out
+        .iter()
+        .filter_map(|d| match *d {
+            Draw::Yaw { yaw, .. } => Some(yaw),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        dimmed_under, under,
-        "the black under the side cart changed with the dim"
+        yaws,
+        vec![0.1],
+        "只有中间那张卡绕竖轴偏转，且角度就是传进来的那个 —— 现在拿到 {yaws:?}"
     );
+    assert!(
+        !out.iter().any(|d| matches!(*d, Draw::Turned { .. })),
+        "静置的卡不该在屏幕平面里转（那是看起来奇怪的那一版）"
+    );
+}
+
+/// 上面那条的反面：**不动的时候必须是普通 `Tex`**。
+///
+/// `Idle::NONE` 是恒等元，插卡、退卡、选核心、静态出图全走它。若为了省事让"yaw = 0"
+/// 也发 `Draw::Yaw`，那些画面的绘制列表就全变了（哪怕看起来一样）——
+/// 而这条流水线是靠列表内容做断言的，看不见的变化就是回归。
+#[test]
+fn a_still_cart_is_a_plain_quad() {
+    let mut s = shelf_with(5);
+    s.index = 2;
+    s.set_faces((0..5).map(|i| Some(TexId::from_raw(10 + i))).collect());
+
+    let mut out = Vec::new();
+    s.draw_row_idle(None, 0.0, 0.0, 1.0, Idle::NONE, &mut out);
+
+    assert!(
+        !out.iter()
+            .any(|d| matches!(*d, Draw::Yaw { .. } | Draw::Turned { .. })),
+        "Idle::NONE 下不该出现任何转过/偏转过的图元"
+    );
+    let faces = out
+        .iter()
+        .filter(|d| matches!(**d, Draw::Tex { .. }))
+        .count();
+    // 720 宽只放得下三张（侧-中-侧），要看的是**它们全都是普通 quad**，不是数量本身。
+    assert_eq!(faces, 3, "中间那一排三张卡都该是普通 quad，现在有 {faces} 张");
 }

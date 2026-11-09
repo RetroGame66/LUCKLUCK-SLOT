@@ -8,6 +8,9 @@
 *.png  binary
 *.webp binary
 *.ttf  binary
+*.otf  binary
+*.jpg  binary
+*.jpeg binary
 *.mp4  binary
 *.pcm  binary
 *.bin  binary

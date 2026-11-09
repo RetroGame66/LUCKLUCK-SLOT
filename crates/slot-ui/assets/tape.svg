@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 226 135">
+  <!-- The built-in tape's outline: the fallback for a card that ships no tape art.
+       226x135 is the Advance cart's height at the artwork's own 1.673 proportion — see `tape.rs`
+       for why the width follows the cart's height rather than the other way round.
+       The path is the old 240x152 outline scaled x0.9417 y0.8882, **non-uniform on purpose**:
+       that is what turns a 1.579 shape into a 1.673 one. Doing it to the path rather than to the
+       face means a card with no art still gets a correctly-proportioned cassette instead of a
+       squashed one. -->
+  <path d="M8.5,0 L217.5,0 C222.4,0 226,3.8 226,8.5 L226,113.7 C226,118.3 224.2,121.9 221.4,124.5 L216.7,129.8 C212.9,133.3 208.1,135 203.3,135 L22.7,135 C17.9,135 13.1,133.3 9.3,129.8 L4.6,124.5 C1.8,121.9 0,118.3 0,113.7 L0,8.5 C0,3.8 3.6,0 8.5,0 Z" fill="#fff"/>
+</svg>

@@ -38,4 +38,22 @@ impl Refusal {
         let secs = age as f32 / 1000.0;
         (secs * SHAKE_HZ * std::f32::consts::TAU).cos() * SHAKE_PX * decay
     }
+
+    /// ★★ 2026-10-27（六六）：「拒绝时让光瞬灭一下」（光效第 3 条）。
+    ///
+    /// 拒绝 = **没通电** —— 所以它不是"再加一层光"，而是让本来亮着的那块**断一下**：
+    /// 插卡位的待机背板（`slot_back_*.png` 那条带 LOGO 的亮条）在 90 ms 里灭掉再回来。
+    /// 一次拒绝只该有一条"视觉句子"，抖动说的是"这一下没过"，断电说的是"这里没接上"，
+    /// 两者同一帧起、各自收 —— 抖动 300 ms，断电先结束。
+    ///
+    /// 返回 0..1 的**变暗量**（1 = 全灭），调用方拿它乘待机灯的 alpha。
+    pub fn dip(&self, now: Millis) -> f32 {
+        const DIP_MS: Millis = 90;
+        let age = now.saturating_sub(self.started);
+        if age >= DIP_MS {
+            return 0.0;
+        }
+        let u = 1.0 - age as f32 / DIP_MS as f32;
+        u * u
+    }
 }

@@ -45,10 +45,15 @@ pub enum Icon {
     /// disappears. Same silhouette-stays-put, weight-carries-state logic as the stars.
     Heart,
     HeartOutline,
+    /// Play, and the pause that takes its place on the same key. Two glyphs rather than one
+    /// tinted two ways because a deck's play key has always been the pause too — and because a
+    /// tape that is running cannot be told to run.
+    Play,
+    Pause,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 16] = [
+    pub const ALL: [Icon; 18] = [
         Icon::Volume,
         Icon::VolumeZero,
         Icon::VolumeMuted,
@@ -65,6 +70,8 @@ impl Icon {
         Icon::StarOutline,
         Icon::Heart,
         Icon::HeartOutline,
+        Icon::Play,
+        Icon::Pause,
     ];
 
     /// Position in `ALL`, which is the order faces are uploaded in. Sound only while `ALL` is
@@ -88,7 +95,12 @@ impl Icon {
             // while the finger is down, solid once it is latched on.
             Icon::FastForward => '\u{f06d2}',
             Icon::FastForwardLatched => '\u{f0211}',
+            // FontAwesome's own backward is the deck's rewind: a tape deck's transport is
+            // rewind and fast-forward, not "previous" and "next", and saying it the tape's way
+            // is most of what makes the deck read as a deck.
             Icon::Rewind => '\u{f04a}',
+            Icon::Play => '\u{f04b}',
+            Icon::Pause => '\u{f04c}',
             Icon::Alert => '\u{f0026}',
             // Beside the capsule, in a slot the gauge reserves whether or not a cable is in,
             // so the gauge and the percent never move when one goes in.

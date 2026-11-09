@@ -1,8 +1,12 @@
 //! 把 slot 开机那块「固定家具」的每个构建函数逐个计时 —— **在设备上跑**。
 //!
-//! 为什么要在设备上：`slot-ui` 依赖 `slot-power` 的 `std::os::unix`，Windows 宿主编不过；
-//! 而且就算编得过，电脑上的绝对耗时也没有意义。设备上只有一个总数（`fixed faces 705 ms`），
-//! 拆分不出来，所以把这个小程序推上去跑一次。
+//! 为什么要在设备上：**绝对耗时**只有设备上才有意义。设备上只有一个总数
+//! （`fixed faces 705 ms`），拆分不出来，所以把这个小程序推上去跑一次。
+//!
+//! ⚠️ 2026-10-04 更正：原先这里写的是"`slot-ui` 依赖 `slot-power` 的 `std::os::unix`，
+//! Windows 宿主编不过"。**宿主现在已经编得过了** —— `slot-power/src/device.rs` 里那处
+//! `ioctl` 已经用 `#[cfg(unix)]` 门起来（宿主走 `SimPlatform`，根本不开马达）。
+//! 但**这条不影响本程序的结论**：电脑上的绝对耗时依旧没有意义，仍要在设备上跑。
 //!
 //! 跑法：
 //!     adb push <这个二进制> /tmp/face_timing
@@ -36,10 +40,10 @@ fn main() {
     }
     rows.push(("字母面 ×27", ms(t), n));
 
+    // ★ 2026-10-25：卡带那半边没了（侧位黑影已删），这里只剩芯片投影。
     let t = Instant::now();
-    let a = slot_ui::cart_shadow();
     let b = slot_ui::chip_shadow_face();
-    rows.push(("卡带/芯片投影", ms(t), a.rgba.len() + b.rgba.len()));
+    rows.push(("芯片投影", ms(t), b.rgba.len()));
 
     let t = Instant::now();
     let mut n = 0;
