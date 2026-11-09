@@ -2,6 +2,11 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+<p align="center">
+  <img src="assets/66slot-title.webp" width="820"
+       alt="LUCKLUCK SLOT — a ten-system retro game frontend for Anbernic H700 handhelds on BaseOS">
+</p>
+
 > **This is a modified fork.** It is based on
 > [slot-cfw/slot](https://github.com/slot-cfw/slot) by **Brandon T. Kowalski** (MIT; upstream was
 > `BrandonKowalski/slot` until November 2026 and the old URL still redirects), with changes by
