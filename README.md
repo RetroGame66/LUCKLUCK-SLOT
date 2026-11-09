@@ -88,7 +88,7 @@ LUCKLUCK SLOT turns a BaseOS handheld into a shelf of game carts. Beyond upstrea
   its own disc shelf.
 - **Saves in numbered slots**, plus a save-state browser that reaches every cart, and cheats that
   live with the cart rather than in one global file.
-- **A boot opening** between your own boot picture and the shelf's first frame.
+- **Your own boot picture and a boot opening** — pick the still picture from `Bootlogos/` in Settings, then a `.slotvid` animation plays between that picture and the shelf's first frame. Both can be replaced; see the section below.
 - **MTP and Wi-Fi direct connect** — the card appears in Explorer plugged in, or is reachable over
   sftp on the same network without pulling it.
 - **A random-wallpaper carousel**, **cartridge art the player owns** (whole-cart art and the paper
@@ -139,8 +139,8 @@ The 640 group renders at 640×480; everything else is 720×480. The two builds a
 behind a flag — row geometry, the plate, the bezel aperture and the desktop art are laid out per
 panel, and the 640 tree carries no MTP responder.
 
-- `slot-companion-toolbox-*-win64.zip` — the Windows toolbox (§ below). Not part of the frontend.
-- `SHA256SUMS.txt` — check the zip against it before writing a card.
+- `slotvid-studio.zip` — SLOTVID STUDIO, a Windows tool that turns any video into a boot opening (§ below). Not part of the frontend; one self-contained exe, no install.
+- `SHA256SUMS.txt` — check the four frontend zips against it before writing a card (it does not cover the tool).
 
 A release is only cut after the build has been through a device: the packages are the tested
 binary, not a nightly.
@@ -374,26 +374,50 @@ over adb — it pushes the binary to `System/slot`, chmods it, clears the cache 
 hand: `adb push System/slot /mnt/sdcard/System/slot && adb shell chmod 0755
 /mnt/sdcard/System/slot && adb shell sync && adb reboot`.)
 
-## The companion toolbox
+## Boot picture and boot opening（开机画面 / 开机片）
 
-`slot-companion-toolbox-*-win64.zip` (Windows). **Not** part of the frontend — the frontend never
-calls it. It does the card upkeep that would otherwise be an adb session: a single self-contained
-executable that talks to the device over adb.
+Two separate things, both on the card, and both yours to replace:
 
-> **The toolbox is being reworked and is not shipped with this release.** The table below describes
-> the build that will go out with it; the 2026-11-09 frontend packages do not include one.
+| | Where it lives | What it does |
+|---|---|---|
+| **Boot picture** (开机画面) | `Bootlogos/`, with the current pick in `System/bootlogo.txt` | the still picture at power-on; switch it in **Settings → 开机画面** |
+| **Boot opening** (开机片) | `System/boot_opening.slotvid` | a short animation with sound, played after the boot picture and before the shelf's first frame |
 
-| Button | What it does |
-|---|---|
-| **卡带编辑器 / Cart editor** | Per-machine shell colour, cart art, the flag, and the laminate — the same table the frontend reads out of `System/Carts/carts.tsv`. |
-| **管理贴纸 / Stickers** | Import, sync and normalise `Labels/` art to the sticker size the frontend actually draws. |
-| **开机画面 / Boot picture** | Previews and replaces the card's boot picture (scaled/cropped to the screen, 24-bit BMP). |
-| **备份存档 / Back up saves** | Pulls `Saves/` and `States/` to a timestamped folder on the PC. |
-| **还原存档 / Restore saves** | Pushes a backup back; asks before overwriting. |
-| **一键对时 / Set clock** | Writes the PC's time to the board's RTC. |
-| **WiFi 直连 / Wi-Fi** | Provisions `System/wifi.conf` over USB, then pulls and pushes files over the same Wi-Fi the frontend's direct-connect page brings up. |
-| **字体瘦身 / Subset font** | Cuts the interface typeface down to the characters this card's game names and the interface actually use, and pushes it to `Music/Fonts/`. Reboot to apply. |
-| **还原字体 / Restore font** | Pushes the full typeface back. Reboot to apply. |
+The opening is a `.slotvid` v1 file: a 64-byte header, a 16-byte index per frame, then each frame's
+JPEG and that frame's slice of PCM. The frontend does **not** decode video — it decodes one still
+per frame and feeds one slice of audio, so the frame number *is* the audio position and picture and
+sound stay in step. Audio is 32768 Hz stereo; a clip with no audio is driven by the frontend's own
+clock. It is optional: move `boot_opening.slotvid` away and the frontend skips the animation and
+falls back to its boot sound — no brick, no effect on the shelf.
+
+All four published packages carry an opening at their panel's native size — 3,040,916 bytes for
+720×480, 2,792,902 bytes for 640×480. The width and height in the header are used as the drawing
+size, so a clip made for one panel does not fill the other's screen: make one per panel.
+
+> This is only the **second screen at power-on**. It is not the per-machine transition when you
+> press `A` to start a game.
+
+## SLOTVID STUDIO
+
+[`slotvid-studio.zip`](https://github.com/RetroGame66/LUCKLUCK-SLOT/releases/download/v2026.11.09/slotvid-studio.zip)
+(Windows, 61,429,383 bytes / ~58.6 MiB; sha256
+`3e6e731e5622e78a7a9b3290e6c383c9b642e2dd49b665c43b8d39b655278418`). **Not** part of the frontend —
+the frontend never calls it. One self-contained exe that turns any video into a boot opening: no
+Python, no ffmpeg install, no command line, no network.
+
+1. Drag a video in (mp4 / mov / mkv / avi / webm / gif …) or pick one. A source with no audio
+   becomes a silent clip automatically.
+2. Choose the panel size — **720×480** (default), **640×480** or **720×720** — the fit (cover /
+   contain / stretch), 24 or 30 fps, sound on or off, and the length (**5 s recommended**: the
+   startup work hides it; anything longer really does add to boot time).
+3. Press generate. `boot_opening.slotvid` lands next to the video; copy it into `System/` on the
+   card and cold-boot.
+
+Audio is resampled to the device's 32768 Hz stereo without changing pitch. The tool enforces the
+frontend's hard limits for you (JPEG frames, integer fps, ≤4096 frames, ≤691200 pixels), so what it
+produces is playable. For batch jobs, `slotvid-studio.exe --cli …` writes its result to
+`<out>.result.json`. The zip also carries a Chinese guide, a UI preview, and the licence texts for
+the bundled ffmpeg and typeface.
 
 ## Building
 
