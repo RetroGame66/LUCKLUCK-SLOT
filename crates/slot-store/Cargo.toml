@@ -5,6 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Reading a rom out of a `.zip`. Only FBNeo opens zips itself — its romsets are zips — so every
+# other core has to be handed bytes that came out of one; see `rom.rs`.
+# `deflate` is the only feature that actually links flate2 (`deflate-flate2` alone leaves the
+# dependency unlinked and zip does not compile). It also drags in `zopfli`, a *compressor*
+# nothing here ever calls.
+zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Building test archives. Same crate as the real dependency, so there is one version in the
+# tree; this half only exists because an integration test is its own crate and cannot see the
+# library's dependencies.
+zip.workspace = true

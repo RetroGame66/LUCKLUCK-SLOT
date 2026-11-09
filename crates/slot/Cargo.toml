@@ -18,6 +18,7 @@ lang-en = ["slot-ui/lang-en"]
 # on, and they are mutually exclusive.
 slot-gfx = { path = "../slot-gfx", default-features = false }
 slot-input = { path = "../slot-input" }
+slot-media = { path = "../slot-media" }
 slot-power = { path = "../slot-power" }
 slot-retro = { path = "../slot-retro" }
 slot-store = { path = "../slot-store" }
@@ -28,6 +29,8 @@ gilrs = { workspace = true, optional = true }
 libloading = { workspace = true }
 lz4_flex = { workspace = true }
 png = { workspace = true }
+# 上电第二屏 .slotvid 的逐帧 JPEG 解码（离线抽好的帧，不是视频解码器）
+zune-jpeg = { workspace = true }
 
 [dev-dependencies]
 # `TexId::from_raw`, so a draw test can name the faces the binary uploads at boot without a

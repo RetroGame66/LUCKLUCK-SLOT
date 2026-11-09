@@ -8,7 +8,27 @@ rust-version = "1.96"
 
 [workspace.dependencies]
 lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+# Reading a rom out of a `.zip`, for every core that cannot do it itself. Only FBNeo reads zips
+# natively (its romsets are zips); the other cores are handed a path and expect a rom at it, so a
+# zipped rom has to be unpacked by us before it reaches one — see `slot-retro/src/rom.rs`.
+# The feature set is trimmed to decompression only. `zip`'s own `deflate` feature also drags in
+# `zopfli`, a *compressor* this never calls, so the flate2 backend is named here instead and the
+# zopfli path is left off. `rust_backend` is miniz_oxide — pure Rust, which matters for a cross
+# build that already carries its own linker.
+# `deflate` is the only feature that actually links flate2 — `deflate-flate2` on its own
+# sets a capability marker and leaves the dependency unlinked, so zip does not compile.
+# It also drags in `zopfli`, a *compressor* this never calls; there is no way to ask for
+# the backend without it, and the cost is a few tens of kilobytes of code that is never
+# entered, next to an 80 MB core.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 png = "0.17"
+# The card's album art is whatever the user dropped there, and a sleeve saved by a phone or a
+# store is a `.jpg` far more often than it is a `.png`. `slot-media::Covers` already indexes
+# `png / jpg / jpeg / webp`, so the decoder has to be able to read at least the first three;
+# without this the index finds the file and the face then draws a blank sleeve, silently.
+# Pure Rust with one tiny dependency (`zune-core`), which matters for a cross build that already
+# carries its own linker.
+zune-jpeg = { version = "0.5", default-features = false, features = ["std", "x86", "neon"] }
 fontdue = "0.9"
 libloading = "0.8"
 winit = "0.30"
@@ -21,3 +41,19 @@ gilrs = "0.11"
 tempfile = "3"
 resvg = { version = "0.48", default-features = false }
 usvg = { version = "0.48", default-features = false }
+# Decoding and tagging for the card's music. A workspace dependency rather than a crate-local
+# one because the codec set is a decision about the whole build, not about one crate: it is
+# what decides which files a card may hold.
+symphonia = { version = "0.6", default-features = false, features = [
+    "all-meta",
+    "mp3",
+    "flac",
+    "ogg",
+    "vorbis",
+    "wav",
+    "pcm",
+    "aac",
+    "isomp4",
+    "alac",
+    "opt-simd",
+] }

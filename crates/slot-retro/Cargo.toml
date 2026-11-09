@@ -6,3 +6,8 @@ rust-version.workspace = true
 
 [dependencies]
 libloading.workspace = true
+# Reading a rom off the card, out of a zip when that is how it is stored. It lives in
+# `slot-store` rather than here because that is where reading a rom already happened
+# (the header reader) and because this crate cannot be tested on a Windows host at all:
+# `libloading` needs a dlltool the sandbox will not spawn.
+slot-store = { path = "../slot-store" }
