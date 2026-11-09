@@ -132,12 +132,20 @@ GB and GBC run on the frontend's built-in Game Boy core, which is not user-switc
 
 ## Downloads
 
-Packages live on the [Releases page](https://github.com/RetroGame66/LUCKLUCK-SLOT/releases). Each release
-carries:
+Packages live on the [Releases page](https://github.com/RetroGame66/LUCKLUCK-SLOT/releases). Each
+release carries **four** frontend zips — pick the panel first, then the language:
 
-- `66slot-frontend-System-*.zip` — the frontend `System/` tree (Chinese build). Releases before
-  2026-11-09 use the `slot-frontend-System-*.zip` name; the contents are the same shape.
-- `66slot-frontend-System-*-en.zip` — the same tree built with `--features device,lang-en`.
+| Package | Panel |
+|---|---|
+| `66slot-frontend-System-720480-V*.zip` | **720×480** — RG SP, RG34XX, RG34XXSP and the rest of the 720 group · Chinese UI |
+| `66slot-frontend-System-720480-V*-en.zip` | the same tree · English UI |
+| `66slot-frontend-System-640480-V*.zip` | **640×480** — RG35XXSP and the 640 group · Chinese UI |
+| `66slot-frontend-System-640480-V*-en.zip` | the same tree · English UI |
+
+The 640 group renders at 640×480; everything else is 720×480. The two builds are not one binary
+behind a flag — row geometry, the plate, the bezel aperture and the desktop art are laid out per
+panel, and the 640 tree carries no MTP responder.
+
 - `slot-companion-toolbox-*-win64.zip` — the Windows toolbox (§ below). Not part of the frontend.
 - `SHA256SUMS.txt` — check the zip against it before writing a card.
 
