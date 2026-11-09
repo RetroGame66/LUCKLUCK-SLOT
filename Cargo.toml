@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# `render_palettes` renders the playback panel to PNG so the colour ramps can be eyeballed;
+# it is a development tool, not part of the frontend, and it has drifted behind the `slot-ui`
+# API it calls (`lcd::panel` now takes the ramp by value). Left out of the workspace so that
+# `cargo build --workspace` on a fresh clone is not blocked by a tool nobody ships.
+exclude = ["crates/render_palettes"]
 
 [workspace.package]
 edition = "2021"

@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang=zh>
+<head>
+<meta charset="utf-8">
+<title>Pixel reader renderer (720x480 native)</title>
+<style>
+  html,body{margin:0;padding:0;background:#000}
+  #panel{display:block;image-rendering:pixelated}
+</style>
+</head>
+<body>
+<canvas id="panel" width="720" height="480"></canvas>
+<script>
+// ── 像素文本阅读器 · 720×480 **原生**重绘（不放大、不画格网） ────────────────────────────
+//
+// 与 panel.html（播放面板）的关系：**同一套渲染语言、不同的基数**。
+//   panel.html：逻辑帧 240×160 → ×3 最近邻 → 720×480，格网踩在格子边界上。
+//   本文件　　：逻辑帧就是 720×480，1:1 出图，**没有格网**（六六 2026-10-07：
+//               「只要保证字体是硬点阵其实不加网格也行」）。
+//
+// 字体：与播放面板同一对 —— 汉字走 16px 寒蝉点阵体（chill-bitmap），
+//       拉丁/数字/符号走 12px Ark Pixel。**按整数倍栅格化**（1×/2×/3×），
+//       每个字形都在自己字体设计尺寸的整数倍上，阈值化后是硬像素、绝不糊。
+//       两种面在各自设计尺寸下 fontAsc+fontDesc 都 = 16 ⇒ 每行 em 框恒为 16 的整数倍。
+//
+// 排版贡献来自 PXReader（2026-08 的 TRIMUI Brick 像素阅读器）：
+//   段落首行缩进 2 字、**避头尾**（行首不出标点）、行/页信息条、遮罩层（扫描线/点阵）。
+// 色板沿用 slot 的 PixelShift 40 套（通用轮换）。
+//
+// 两条渲染路：**阅读屏 = 四阶 shade 缓冲 → 查色板**（与播放面板同一条路）；
+//             **书架 = 直接 RGB**（书脊是彩色贴面，四阶表达不了 —— 真实实现里它就是 RGBA 纹理）。
+const W=720,H=480;
+const PAPER=0,EDGE=1,RULE=2,INK=3;
+const THRESH=128;
+const CJK_FONT='"ChillBitmap"', LATIN_FONT='"ArkPixel"';
+
+// 字体注册表：每张字体只在自己**设计网格的整数倍**上干净（见
+// `slot-点阵中文字体-候选与实测-2026-10-07.md`）。
+//   grid = 设计网格（实测对齐的那一档）；latinRatio = 拉丁面相对汉字的字号比。
+const FAMS={
+  chill:  {cjk:CJK_FONT,  latin:LATIN_FONT, grid:16, latinRatio:0.75}, // 播放面板现用
+  ark12:  {cjk:LATIN_FONT,latin:LATIN_FONT, grid:12, latinRatio:1},
+  ark10:  {cjk:'"ArkPixel10"', latin:'"ArkPixel10"', grid:10, latinRatio:1},
+  fusion8:{cjk:'"Fusion8"',  latin:'"Fusion8"',  grid:8,  latinRatio:1}, // MIT，梯子最密
+  // ⚠️ Cubic 11 名义是 11×11，但**实测对齐在 12 / 24 / 36 / 48** —— 所以这里写 12 而不是 11。
+  //    「设计网格」一律以**实测**为准（`font_size_audit`），不抄字体自己的宣传。
+  cubic11:{cjk:'"Cubic11"',  latin:'"Cubic11"',  grid:12, latinRatio:1},
+  wqy:    {cjk:'"WqyBitmap"',latin:'"WqyBitmap"',grid:18, latinRatio:1}, // 唯一的宋体
+  // GNU Unifont：**基本区 + 扩展A 都是 100%**，5.3 MB，16×16 全角方格风格。
+  unifont:{cjk:'"Unifont"',  latin:'"Unifont"',  grid:16, latinRatio:1},
+  // 美咲 8×8：JIS 字集，中文只覆盖 30.3%（收进来是为了看清"覆盖面换来的代价"）。
+  misaki: {cjk:'"Misaki"',   latin:'"Misaki"',   grid:8,  latinRatio:1},
+};
+function planFor(fontKey,n){
+  const f=FAMS[fontKey]||FAMS.chill;
+  const cjk=f.grid*n;
+  return {cjkPx:cjk,latinPx:Math.round(cjk*f.latinRatio),cjkFont:f.cjk,latinFont:f.latin};
+}
+let PLAN=planFor('chill',2);
+
+// 面板家具：与播放面板同一套（墨框 + 左上 EDGE 浅边），按 3 倍视觉重量放大到 720 原生
+const FRAME=6, BEVEL=3, PAD=12;
+const cx0=FRAME+PAD, cx1=W-FRAME-PAD;      // 18 .. 702
+const INFO_CJK=16, INFO_LATIN=12;          // 读数固定 1×（它是读数，不是正文）
+
+const _fm={}, _raster={};
+function fontMetrics(px,font){
+  const k=px+'|'+font; if(_fm[k]) return _fm[k];
+  const c=document.createElement('canvas').getContext('2d');
+  c.font=`${px}px ${font}`;
+  const t=c.measureText('国');
+  const a=(t.fontBoundingBoxAscent!=null)?t.fontBoundingBoxAscent:Math.round(px*0.84);
+  const d=(t.fontBoundingBoxDescent!=null)?t.fontBoundingBoxDescent:Math.round(px*0.16);
+  return (_fm[k]={asc:a,desc:d});
+}
+function emH(px,font){ const m=fontMetrics(px,font); return m.asc+m.desc; }
+function rasterGlyph(ch,px,font){
+  const k=ch+'@'+px+'@'+font; if(_raster[k]) return _raster[k];
+  const probe=document.createElement('canvas').getContext('2d');
+  probe.font=`${px}px ${font}`;
+  const metrics=probe.measureText(ch), pad=px*2+4;
+  const w=Math.max(1,Math.ceil(metrics.width+pad*2)), h=px+6;
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const x=c.getContext('2d'); x.font=`${px}px ${font}`; x.textBaseline='top'; x.fillStyle='#000';
+  x.clearRect(0,0,w,h); x.fillText(ch,pad,1);
+  const d=x.getImageData(0,0,w,h).data;
+  let minX=w,minY=h,maxX=-1,maxY=-1;
+  for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++) if(d[(y*w+xx)*4+3]>=THRESH){
+    if(xx<minX)minX=xx;if(xx>maxX)maxX=xx;if(y<minY)minY=y;if(y>maxY)maxY=y;
+  }
+  const gw=maxX<minX?0:maxX-minX+1, gh=maxY<minY?0:maxY-minY+1;
+  const alpha=new Uint8Array(gw*gh);
+  for(let y=0;y<gh;y++) for(let xx=0;xx<gw;xx++) alpha[y*gw+xx]=d[((minY+y)*w+minX+xx)*4+3];
+  return (_raster[k]={w:gw,h:gh,alpha,dx:minX-pad,dy:minY-1,advance:metrics.width});
+}
+function isCjk(ch){
+  const c=ch.codePointAt(0);
+  return (c>=0x2E80&&c<=0x2FFF)||(c>=0x3000&&c<=0x30FF)||(c>=0x3400&&c<=0x9FFF)||
+    (c>=0xF900&&c<=0xFAFF)||(c>=0xFE30&&c<=0xFE4F)||(c>=0xFF00&&c<=0xFFEF)||
+    (c>=0x20000&&c<=0x2FA1F);
+}
+const NO_LINE_START='，。、！？；：）】》」』…—·％%';
+function charGap(prev,ch,px){
+  if(!prev) return 0;
+  if(isCjk(prev)&&isCjk(ch)) return Math.max(1,Math.round(px/12));
+  if(isCjk(prev)||isCjk(ch)) return 0;
+  return Math.round(px*0.1);
+}
+function itemsOf(text,plan){
+  const items=[];
+  for(const ch of Array.from(text)){
+    const cjk=isCjk(ch);
+    const px=cjk?plan.cjkPx:plan.latinPx, font=cjk?plan.cjkFont:plan.latinFont;
+    items.push({ch,px,font,g:rasterGlyph(ch,px,font)});
+  }
+  return items;
+}
+function widthOf(items){
+  let w=0;
+  for(let i=0;i<items.length;i++){ w+=items[i].g.advance; if(i+1<items.length) w+=charGap(items[i].ch,items[i+1].ch,items[i].px); }
+  return w;
+}
+function textWidth(text,plan){ return widthOf(itemsOf(text,plan)); }
+function inkSpan(text,plan){
+  const items=itemsOf(text,plan); if(!items.length) return [0,0];
+  let asc=0; for(const it of items) asc=Math.max(asc,fontMetrics(it.px,it.font).asc);
+  let lo=1e9,hi=-1e9;
+  for(const it of items){
+    const top=asc-fontMetrics(it.px,it.font).asc;
+    lo=Math.min(lo,top+it.g.dy); hi=Math.max(hi,top+it.g.dy+it.g.h);
+  }
+  return [lo,hi];
+}
+function stampGlyph(buf,m,X0,emTop,shade,clipX0,clipX1,clipY0,clipY1){
+  for(let fy=0;fy<m.h;fy++) for(let fx=0;fx<m.w;fx++){
+    if(m.alpha[fy*m.w+fx]<THRESH) continue;
+    const X=X0+fx, Y=emTop+m.dy+fy;
+    if(X<clipX0||X>=clipX1||Y<clipY0||Y>=clipY1) continue;
+    buf[Y*W+X]=shade;
+  }
+}
+function drawText(buf,text,emTop,shade,align,x0,x1,plan,cy0,cy1){
+  if(!text) return;
+  const items=itemsOf(text,plan); if(!items.length) return;
+  let asc=0; for(const it of items) asc=Math.max(asc,fontMetrics(it.px,it.font).asc);
+  const lineW=widthOf(items);
+  const left = align==='center' ? Math.round((x0+x1)/2-lineW/2)
+             : align==='right'  ? Math.round(x1-lineW)
+             : x0;
+  let pen=0;
+  const y0=(cy0===undefined)?0:cy0, y1=(cy1===undefined)?H:cy1;
+  for(let i=0;i<items.length;i++){
+    const it=items[i];
+    const top=emTop+(asc-fontMetrics(it.px,it.font).asc);
+    if(it.g.w&&it.g.h) stampGlyph(buf,it.g,Math.round(left+pen+it.g.dx),top,shade,x0,x1,y0,y1);
+    pen+=it.g.advance+(i+1<items.length?charGap(it.ch,items[i+1].ch,it.px):0);
+  }
+}
+function fillRect(buf,x,y,w,h,shade){
+  for(let yy=y;yy<y+h;yy++){ if(yy<0||yy>=H) continue;
+    for(let xx=x;xx<x+w;xx++){ if(xx<0||xx>=W) continue; buf[yy*W+xx]=shade; } }
+}
+function wrapParas(text,maxW,plan,indentChars){
+  const out=[];
+  for(const raw of text.split('\n')){
+    const p=raw.trim();
+    if(!p){ out.push(''); continue; }
+    const indentStr=indentChars?'　'.repeat(indentChars):'';
+    let line='', items=indentStr?itemsOf(indentStr,plan):[];
+    for(const ch of Array.from(p)){
+      const cjk=isCjk(ch);
+      const px=cjk?plan.cjkPx:plan.latinPx, font=cjk?plan.cjkFont:plan.latinFont;
+      const it={ch,px,font,g:rasterGlyph(ch,px,font)};
+      const add=(items.length?charGap(items[items.length-1].ch,ch,items[items.length-1].px):0)+it.g.advance;
+      if(widthOf(items)+add>maxW && items.length){
+        if(NO_LINE_START.includes(ch)){ items.push(it); line+=ch; out.push(line); line=''; items=[]; continue; }
+        out.push(line); line=''; items=[];
+      }
+      items.push(it); line+=ch;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+// ── 阅读屏（四阶 shade 缓冲） ─────────────────────────────────────────────────────────────
+function layoutRead(lineH){
+  const headTop=FRAME+BEVEL+PAD;
+  const hairY=headTop+INFO_CJK+6;
+  const bodyTop=hairY+8;
+  const trackH=6;
+  const stripH=INFO_CJK+6+trackH+6;
+  const stripY=H-FRAME-stripH;
+  const bodyBot=stripY-8;
+  const rows=Math.max(1,Math.floor((bodyBot-bodyTop)/lineH));
+  return {headTop,hairY,bodyTop,bodyBot,stripY,stripH,trackH,rows};
+}
+function readScreen(cfg){
+  const plan=PLAN;
+  // 行高默认取字体的 em 框（asc+desc）；cfg.lineH 可收紧（em 框里自带行距，
+  // 例如 Ark Pixel 12px 网格的 em = 16 = 12 + 4，24px 时行框就是 32，偏松）
+  const lineH=cfg.lineH||Math.round(emH(plan.cjkPx,plan.cjkFont));
+  const L=layoutRead(lineH);
+  const buf=new Uint8Array(W*H);
+  fillRect(buf,0,0,W,FRAME,INK); fillRect(buf,0,H-FRAME,W,FRAME,INK);
+  fillRect(buf,0,0,FRAME,H,INK); fillRect(buf,W-FRAME,0,FRAME,H,INK);
+  fillRect(buf,FRAME,FRAME,W-2*FRAME,BEVEL,EDGE); fillRect(buf,FRAME,FRAME,BEVEL,H-2*FRAME,EDGE);
+
+  const info={cjkPx:INFO_CJK,latinPx:INFO_LATIN,cjkFont:CJK_FONT,latinFont:LATIN_FONT};
+  drawText(buf,cfg.book,L.headTop,INK,'left',cx0,cx1,info);
+  drawText(buf,cfg.pageLabel,L.headTop,RULE,'right',cx0,cx1,info);
+  fillRect(buf,cx0,L.hairY,cx1-cx0,1,RULE);
+
+  const lines=cfg.lines;
+  for(let i=0;i<L.rows && i<lines.length;i++){
+    drawText(buf,lines[i],L.bodyTop+i*lineH,INK,'left',cx0,cx1,plan);
+  }
+
+  fillRect(buf,FRAME,L.stripY,W-2*FRAME,L.stripH,INK);
+  const tTop=L.stripY+6;
+  drawText(buf,cfg.stripLeft,tTop,PAPER,'left',cx0,cx1,info);
+  drawText(buf,cfg.stripRight,tTop,PAPER,'right',cx0,cx1,info);
+  const trackY=L.stripY+INFO_CJK+6;
+  const avail=cx1-cx0, GAP=3, SEG=10;
+  let n=Math.max(1,Math.floor(avail/(SEG+GAP)));
+  const pitch=Math.floor((avail+GAP)/n), seg=Math.max(2,pitch-GAP);
+  const lit=Math.round(cfg.frac*n);
+  for(let i=0;i<n;i++) fillRect(buf,cx0+i*pitch,trackY,seg,L.trackH,(i<lit)?PAPER:RULE);
+  return buf;
+}
+
+// ── 书架（直接 RGB：书脊是彩色贴面） ─────────────────────────────────────────────────────
+const SPINES=[
+  {w:120,h:300,title:'活着',   c:[126,52,44]},
+  {w:128,h:322,title:'边城',   c:[42,70,104]},
+  {w:156,h:356,title:'夜航西飞',c:[96,68,36]},
+  {w:128,h:322,title:'小王子', c:[46,88,68]},
+  {w:120,h:300,title:'城南旧事',c:[120,92,36]},
+];
+function rgbSet(rgb,x,y,c){
+  if(x<0||x>=W||y<0||y>=H) return;
+  const i=(y*W+x)*3; rgb[i]=c[0]; rgb[i+1]=c[1]; rgb[i+2]=c[2];
+}
+function rgbRect(rgb,x,y,w,h,c){ for(let yy=y;yy<y+h;yy++) for(let xx=x;xx<x+w;xx++) rgbSet(rgb,xx,yy,c); }
+// 在 RGB 上画字：先画进 shade 缓冲（1=墨），再按指定色刷上去
+function drawTextRGB(rgb,text,emTop,colour,align,x0,x1,plan){
+  const shade=new Uint8Array(W*H);
+  drawText(shade,text,emTop,1,align,x0,x1,plan);
+  for(let i=0;i<W*H;i++) if(shade[i]) { const x=i%W, y=(i/W)|0; rgbSet(rgb,x,y,colour); }
+}
+function shelfScreen(cfg){
+  const rgb=new Uint8Array(W*H*3);
+  const BG=[26,26,30], PLANK=[62,62,70], PAPER=[238,235,228], DIM=[150,148,142];
+  rgbRect(rgb,0,0,W,H,BG);
+  rgbRect(rgb,0,0,W,FRAME,[12,12,14]); rgbRect(rgb,0,H-FRAME,W,FRAME,[12,12,14]);
+  rgbRect(rgb,0,0,FRAME,H,[12,12,14]); rgbRect(rgb,W-FRAME,0,FRAME,H,[12,12,14]);
+  rgbRect(rgb,FRAME,FRAME,W-2*FRAME,BEVEL,[70,70,78]); rgbRect(rgb,FRAME,FRAME,BEVEL,H-2*FRAME,[70,70,78]);
+
+  const info={cjkPx:INFO_CJK,latinPx:INFO_LATIN,cjkFont:CJK_FONT,latinFont:LATIN_FONT};
+  drawTextRGB(rgb,'书架',FRAME+BEVEL+PAD,PAPER,'left',cx0,cx1,info);
+  drawTextRGB(rgb,cfg.count,FRAME+BEVEL+PAD,DIM,'right',cx0,cx1,info);
+
+  const totalW=SPINES.reduce((a,s)=>a+s.w,0);
+  const x0=Math.round((W-totalW)/2);
+  const shelfY=398;
+  rgbRect(rgb,x0-10,shelfY,totalW+20,6,PLANK);
+  rgbRect(rgb,x0-10,shelfY+6,totalW+20,3,[20,20,24]);
+  let x=x0;
+  for(let i=0;i<SPINES.length;i++){
+    const s=SPINES[i], y=shelfY-s.h, mid=(i===2);
+    rgbRect(rgb,x,y,s.w,s.h,s.c);
+    rgbRect(rgb,x,y,3,s.h,[Math.min(255,s.c[0]+46),Math.min(255,s.c[1]+46),Math.min(255,s.c[2]+46)]);
+    rgbRect(rgb,x+s.w-3,y,3,s.h,[Math.round(s.c[0]*0.6),Math.round(s.c[1]*0.6),Math.round(s.c[2]*0.6)]);
+    rgbRect(rgb,x+6,y+12,s.w-12,2,[Math.round(s.c[0]*0.65),Math.round(s.c[1]*0.65),Math.round(s.c[2]*0.65)]);
+    rgbRect(rgb,x+6,shelfY-18,s.w-12,2,[Math.round(s.c[0]*0.65),Math.round(s.c[1]*0.65),Math.round(s.c[2]*0.65)]);
+    const px=mid?24:22;
+    const fp={cjkPx:px,latinPx:Math.round(px*0.75),cjkFont:CJK_FONT,latinFont:LATIN_FONT};
+    const chars=Array.from(s.title), step=Math.round(emH(px,CJK_FONT));
+    let ty=Math.round(y+(s.h-chars.length*step)/2);
+    for(const ch of chars){ drawTextRGB(rgb,ch,ty,PAPER,'center',x,x+s.w,fp); ty+=step; }
+    if(mid) rgbRect(rgb,x-2,y-2,s.w+4,4,[236,196,96]);
+    x+=s.w;
+  }
+  // 底条：选中的书名
+  const stripY=H-FRAME-40;
+  rgbRect(rgb,FRAME,stripY,W-2*FRAME,40,[12,12,14]);
+  drawTextRGB(rgb,'夜航西飞 · 第一章',stripY+12,PAPER,'left',cx0,cx1,info);
+  drawTextRGB(rgb,'A 打开    B 返回',stripY+12,DIM,'right',cx0,cx1,info);
+  return rgb;
+}
+
+// ── 出图 ─────────────────────────────────────────────────────────────────────────────────
+function shadeToRGB(buf,ramp){ const out=new Uint8Array(W*H*3); for(let i=0;i<W*H;i++){ const c=ramp[buf[i]]; out[i*3]=c[0]; out[i*3+1]=c[1]; out[i*3+2]=c[2]; } return out; }
+function finish(rgb,cfg,inkc){
+  const cv=document.getElementById('panel'), ctx=cv.getContext('2d');
+  const img=ctx.createImageData(W,H);
+  const m=cfg.mask||'none', k=cfg.maskStrength||0.22;
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    const i=(y*W+x)*3;
+    let r=rgb[i],g=rgb[i+1],b=rgb[i+2];
+    let hit=false;
+    if(m==='scan'||m==='both') hit = hit || (y%3===2);
+    if(m==='dot' ||m==='both') hit = hit || ((x%4)<2 && (y%4)<2);
+    if(hit){ r=Math.round(r+(inkc[0]-r)*k); g=Math.round(g+(inkc[1]-g)*k); b=Math.round(b+(inkc[2]-b)*k); }
+    const d=(y*W+x)*4;
+    img.data[d]=r; img.data[d+1]=g; img.data[d+2]=b; img.data[d+3]=255;
+  }
+  ctx.putImageData(img,0,0);
+  return cv.toDataURL('image/png');
+}
+function render(cfg){
+  const n=cfg.scale||2;
+  PLAN=planFor(cfg.font,n);
+  const ramp=cfg.ramp;
+  if(cfg.screen==='shelf') return finish(shelfScreen(cfg),cfg,[12,12,14]);
+  const lines = cfg.lines || wrapParas(cfg.text, cx1-cx0, PLAN, 2);
+  const buf = readScreen(Object.assign({},cfg,{lines}));
+  return finish(shadeToRGB(buf,ramp),cfg,ramp[3]);
+}
+function measure(font,scale,lineH){
+  const n=scale||2;
+  const plan=planFor(font,n);
+  const lh=lineH||Math.round(emH(plan.cjkPx,plan.cjkFont));
+  const L=layoutRead(lh);
+  const cjkPerLine=Math.floor((cx1-cx0)/Math.ceil(plan.cjkPx+Math.max(1,plan.cjkPx/12)));
+  return {font:font||'chill',n,cjk:plan.cjkPx,latin:plan.latinPx,lineH:lh,rows:L.rows,cjkPerLine,charsPerPage:L.rows*cjkPerLine};
+}
+window.render=render;
+window.measure=measure;
+</script>
+</body>
+</html>

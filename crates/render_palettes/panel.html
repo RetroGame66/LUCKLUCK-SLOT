@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang=zh>
+<head>
+<meta charset="utf-8">
+<title>LCD panel renderer</title>
+<style>
+  html,body{margin:0;padding:0;background:#000}
+  #panel{display:block;image-rendering:pixelated}
+</style>
+</head>
+<body>
+<canvas id="panel" width="720" height="480"></canvas>
+<script>
+// 复古 Game Boy LCD 播放面板的网页版重绘：几何与 slot-ui::lcd::compose() 对齐。
+//
+// 字体策略（逐字形自动分流）：汉字/假名走 16px 寒蝉点阵体（原生设计尺寸），
+// 拉丁字母、数字、符号走 12px Ark Pixel（原生设计尺寸）。两种字体在各自字号下
+// fontAscent+fontDescent 都恰好等于 16，所以每行文本的 em 框恒为 16px、基线恒在
+// emTop+ascent——混合字号可直接按共同基线对齐排版。
+// 绝不缩放位图：每个字形都按自己的设计字号栅格化，再 1-bit 阈值化（THRESH）。
+const W=240,H=160,S=3,FRAME=2,PAD=4;
+const PAPER=0,EDGE=1,RULE=2,INK=3;
+const LATIN_FONT='"ArkPixel"', CJK_FONT='"ChillBitmap"';
+const PX_LATIN=12, PX_CJK=16;
+// 字体计划：默认汉字 16px 寒蝉、拉丁 12px Ark Pixel。cfg.plan 可整体换成 10px 拉丁面做比较。
+// 项目的 slot-ui::text 本来就按「≤11px 用内置 10px 面，否则 12px 面」选字体，10px 面是随包的。
+let PLAN={latinPx:PX_LATIN, latinFont:LATIN_FONT, cjkPx:PX_CJK, cjkFont:CJK_FONT};
+const THRESH=128;
+
+const content_x0=FRAME+PAD, content_x1=W-FRAME-PAD;   // 6, 234
+const strip_x0=FRAME, strip_x1=W-FRAME;               // 2, 238（走带条与边框齐平）
+
+// 纵向版式（逻辑像素）。cfg.layout 可覆盖，便于比较不同行距。
+const DEF={
+  titleTop: 6,            // 歌名行 em 框顶（「歌手名 - 歌名」）
+  metaTop: null,          // null = 自动：在歌名行底与正文框顶之间居中
+  bodyY0: 40, bodyY1: 128,
+  stripY0: 130,           // 走带条顶
+  trackY: 150, trackH: 4, // 进度条
+  lyricStep: 21,          // 歌词行距（默认 4 行）
+};
+function layoutOf(cfg){ return Object.assign({}, DEF, (cfg && cfg.layout) || {}); }
+// 走带条文字：在「走带条顶边」与「进度条顶」之间垂直居中（按墨迹居中）。
+function stripTextTop(L){
+  const [lo,hi]=inkSpan('0:00');
+  return L.stripY0 + Math.round((L.trackY - L.stripY0 - (hi-lo))/2) - lo;
+}
+
+const _fm={}, _raster={};
+function fontMetrics(px,font){
+  const fam=font||LATIN_FONT, k=px+'|'+fam;
+  if(_fm[k]) return _fm[k];
+  const c=document.createElement('canvas').getContext('2d');
+  c.font=`${px}px ${fam}`;
+  const t=c.measureText('国');
+  const a=(t.fontBoundingBoxAscent!=null)?t.fontBoundingBoxAscent:Math.round(px*0.84);
+  const d=(t.fontBoundingBoxDescent!=null)?t.fontBoundingBoxDescent:Math.round(px*0.16);
+  return (_fm[k]={asc:a,desc:d});
+}
+// 各字体面的 em 框高度（= fontAsc+fontDesc）：寒蝉16 = 16，Ark12 = 16，Ark10 = 14。
+function planLatinEmH(){ const m=fontMetrics(PLAN.latinPx,PLAN.latinFont); return m.asc+m.desc; }
+function planCjkEmH(){ const m=fontMetrics(PLAN.cjkPx,PLAN.cjkFont); return m.asc+m.desc; }
+function rasterGlyph(ch,px,font){
+  const fam=font||LATIN_FONT, k=ch+'@'+px+'@'+fam; if(_raster[k]) return _raster[k];
+  const probe=document.createElement('canvas').getContext('2d');
+  probe.font=`${px}px ${fam}`;
+  const metrics=probe.measureText(ch), pad=px*2+4;
+  const w=Math.max(1,Math.ceil(metrics.width+pad*2)), h=px+6;
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const x=c.getContext('2d'); x.font=`${px}px ${fam}`; x.textBaseline='top'; x.fillStyle='#000';
+  x.clearRect(0,0,w,h); x.fillText(ch,pad,1);
+  const d=x.getImageData(0,0,w,h).data;
+  let minX=w,minY=h,maxX=-1,maxY=-1;
+  for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++) if(d[(y*w+xx)*4+3]>=THRESH){
+    if(xx<minX)minX=xx;if(xx>maxX)maxX=xx;if(y<minY)minY=y;if(y>maxY)maxY=y;
+  }
+  const gw=maxX<minX?0:maxX-minX+1, gh=maxY<minY?0:maxY-minY+1;
+  const alpha=new Uint8Array(gw*gh);
+  for(let y=0;y<gh;y++) for(let xx=0;xx<gw;xx++) alpha[y*gw+xx]=d[((minY+y)*w+minX+xx)*4+3];
+  // dx: 墨迹左缘相对笔位；dy: 墨迹上缘相对 em 框顶（textBaseline='top' 画在 y=1）
+  return (_raster[k]={w:gw,h:gh,alpha,dx:minX-pad,dy:minY-1,advance:metrics.width});
+}
+function isCjk(ch){
+  const c=ch.codePointAt(0);
+  return (c>=0x2E80&&c<=0x2FFF)||(c>=0x3000&&c<=0x30FF)||(c>=0x3400&&c<=0x9FFF)||
+    (c>=0xF900&&c<=0xFAFF)||(c>=0xFE30&&c<=0xFE4F)||(c>=0xFF00&&c<=0xFFEF)||
+    (c>=0x20000&&c<=0x2FA1F);
+}
+function charGap(prev,ch,px){
+  if(!prev) return 0;
+  if(isCjk(prev)&&isCjk(ch)) return Math.max(1,Math.round(px/12)); // CJK 最小光学字距，防相邻字面黏连
+  if(isCjk(prev)||isCjk(ch)) return 0;
+  return Math.round(px*0.1); // 与项目 Latin tracking 规则一致
+}
+function lineItems(text){
+  const items=[];
+  for(const ch of Array.from(text)){
+    const cjk=isCjk(ch);
+    const px=cjk?PLAN.cjkPx:PLAN.latinPx, font=cjk?PLAN.cjkFont:PLAN.latinFont;
+    items.push({ch,px,font,g:rasterGlyph(ch,px,font)});
+  }
+  return items;
+}
+function lineWidth(items){
+  let w=0;
+  for(let i=0;i<items.length;i++){ w+=items[i].g.advance; if(i+1<items.length) w+=charGap(items[i].ch,items[i+1].ch,items[i].px); }
+  return w;
+}
+// 该行「墨迹」相对 em 框顶的 [上, 下) 偏移。排版居中要按墨迹算，不能按 em 框算：
+// Chromium 的 textBaseline='top' 把字形画得贴着 em 框顶，拉丁面尤其明显（12px 时墨只占 1..9）。
+function inkSpan(text){
+  const items=lineItems(text);
+  if(!items.length) return [0,0];
+  let asc=0; for(const it of items) asc=Math.max(asc,fontMetrics(it.px,it.font).asc);
+  let lo=1e9, hi=-1e9;
+  for(const it of items){
+    const top=asc-fontMetrics(it.px,it.font).asc;
+    lo=Math.min(lo,top+it.g.dy); hi=Math.max(hi,top+it.g.dy+it.g.h);
+  }
+  return [lo,hi];
+}
+function stampGlyph(buf,m,X0,emTop,shade,cy0,cy1){
+  for(let fy=0;fy<m.h;fy++) for(let fx=0;fx<m.w;fx++){
+    if(m.alpha[fy*m.w+fx]<THRESH) continue;
+    const X=X0+fx, Y=emTop+m.dy+fy;
+    if(X<0||X>=W||Y<0||Y>=H) continue;
+    if(X<content_x0||X>=content_x1) continue;      // 横向裁到内容区，防止长标题压到边框
+    if(cy0!==undefined && (Y<cy0||Y>=cy1)) continue;
+    buf[Y*W+X]=shade;
+  }
+}
+// emTop 为该行 em 框顶；混合字号按共同基线（emTop + 最大 ascent）对齐。
+function drawText(buf,text,emTop,shade,align,x0,x1,cy0,cy1){
+  if(!text) return;
+  const items=lineItems(text); if(!items.length) return;
+  let asc=0; for(const it of items) asc=Math.max(asc,fontMetrics(it.px,it.font).asc);
+  const lineW=lineWidth(items);
+  // 超宽时不再居中（居中会把两端一起裁掉、连歌手名都看不见），改为左对齐只裁尾部。
+  const effAlign = (align==='center' && lineW > (x1-x0)) ? 'left' : align;
+  const left = effAlign==='center' ? Math.round((x0+x1)/2-lineW/2)
+             : effAlign==='right'  ? Math.round(x1-lineW)
+             : x0;
+  let pen=0;
+  for(let i=0;i<items.length;i++){
+    const it=items[i];
+    const top=emTop+(asc-fontMetrics(it.px,it.font).asc);
+    if(it.g.w&&it.g.h) stampGlyph(buf,it.g,Math.round(left+pen+it.g.dx),top,shade,cy0,cy1);
+    pen+=it.g.advance+(i+1<items.length?charGap(it.ch,items[i+1].ch,it.px):0);
+  }
+}
+function fillRect(buf,x,y,w,h,shade){ for(let yy=y;yy<y+h;yy++) for(let xx=x;xx<x+w;xx++){ if(xx>=0&&xx<W&&yy>=0&&yy<H) buf[yy*W+xx]=shade; } }
+function clock(s){ const m=Math.floor(s/60), ss=Math.floor(s%60); return m+':'+String(ss).padStart(2,'0'); }
+function transportWord(t){ return t==='playing'?'PLAY':t==='paused'?'PAUSE':'STOP'; }
+function spectrum(){
+  const a=[];
+  for(let i=0;i<32;i++){ const f=i/31; let v=Math.pow(1-f,1.25)*0.92+0.06*Math.sin(i*1.7+0.6)+0.05; a.push(Math.min(1,Math.max(0.06,v))); }
+  return a;
+}
+function section(buf,x0,y0,x1,y1){ fillRect(buf,x0,y0,x1-x0,1,RULE); fillRect(buf,x0,y1-1,x1-x0,1,RULE); fillRect(buf,x0,y0,1,y1-y0,RULE); fillRect(buf,x1-1,y0,1,y1-y0,RULE); }
+function frame(buf){
+  fillRect(buf,0,0,W,FRAME,INK); fillRect(buf,0,H-FRAME,W,FRAME,INK); fillRect(buf,0,0,FRAME,H,INK); fillRect(buf,W-FRAME,0,FRAME,H,INK);
+  fillRect(buf,FRAME,FRAME,W-2*FRAME,1,EDGE); fillRect(buf,FRAME,FRAME,1,H-2*FRAME,EDGE);
+}
+function spectrumBody(buf,L){
+  const x0=content_x0,y0=L.bodyY0,x1=content_x1,y1=L.bodyY1;
+  section(buf,x0,y0,x1,y1);
+  const inner_x0=x0+1, inner_w=(x1-1)-inner_x0;
+  const pitch=Math.max(2,Math.floor(inner_w/32)), used=pitch*32, start=inner_x0+Math.floor((inner_w-used)/2);
+  const bw=Math.max(2,Math.round(pitch*0.72));
+  const top=y0+2, floor=y1-2, span=floor-top; const lv=spectrum();
+  for(let b=0;b<32;b++){ const bx=start+b*pitch+1; fillRect(buf,bx,top,bw,floor-top+1,EDGE); const hh=Math.round(lv[b]*span); if(hh>0) fillRect(buf,bx,floor-hh+1,bw,hh,INK); }
+}
+function lyricBody(buf,lines,L){
+  const x0=content_x0,y0=L.bodyY0,x1=content_x1,y1=L.bodyY1;
+  section(buf,x0,y0,x1,y1);
+  const cx0=x0+1,cx1=x1-1,cy0=y0+2,cy1=y1-1;
+  const n=lines.length, step=L.lyricStep;
+  const total=(n-1)*step+planCjkEmH();
+  const first=cy0+Math.round(((cy1-cy0)-total)/2);   // 整块歌词在正文区内垂直居中
+  const mid=Math.floor(n/2);
+  for(let i=0;i<n;i++){
+    const emTop=first+i*step;
+    if(emTop+planCjkEmH()<=cy0||emTop>=cy1) continue;
+    drawText(buf,lines[i],emTop,(i===mid)?INK:RULE,'center',cx0,cx1,cy0,cy1);
+  }
+}
+function bar(buf,mode,elapsed,length,L){
+  const y0=L.stripY0, y1=H-FRAME;
+  fillRect(buf,strip_x0,y0,strip_x1-strip_x0,y1-y0,INK);
+  const t=stripTextTop(L);
+  if(elapsed>0||length>0) drawText(buf,clock(elapsed),t,PAPER,'left',content_x0,content_x1);
+  if(length>0) drawText(buf,clock(length),t,PAPER,'right',content_x0,content_x1);
+  drawText(buf,'['+mode+']',t,PAPER,'center',strip_x0,strip_x1);
+  const frac=length>0?Math.min(1,Math.max(0,elapsed/length)):0;
+  const avail=strip_x1-strip_x0, GAP=2, SEG_WANT=6;
+  let n=Math.max(1,Math.floor(avail/(SEG_WANT+GAP)));
+  while(n>1 && ((avail-(n*Math.floor((avail+GAP)/n)-GAP))%2)!==0) n--;
+  const pitch=Math.floor((avail+GAP)/n), seg=Math.max(2,pitch-GAP), run=n*pitch-GAP, x=strip_x0+Math.floor((avail-run)/2);
+  const lit=Math.round(frac*n);
+  for(let i=0;i<n;i++) fillRect(buf,x+i*pitch,L.trackY,seg,L.trackH,(i<lit)?PAPER:RULE);
+}
+function renderPanel(cfg){
+  PLAN=Object.assign({latinPx:PX_LATIN,latinFont:LATIN_FONT,cjkPx:PX_CJK,cjkFont:CJK_FONT},cfg.plan||{});
+  const L=layoutOf(cfg);
+  const buf=new Uint8Array(W*H);
+  frame(buf);
+
+  // 歌名行：歌手名 - 歌名（汉字 16px / 拉丁按 PLAN 自动分流，共用基线）
+  const titleText = cfg.artist ? cfg.artist + ' - ' + cfg.title : cfg.title;
+  drawText(buf,titleText,L.titleTop,INK,'center',content_x0,content_x1);
+
+  // 元信息行：在「歌名行墨迹底」与「正文框顶」之间垂直居中（按墨迹；cfg.layout.metaTop 可覆盖）
+  const titleInkBottom = L.titleTop + inkSpan(titleText)[1];
+  const [mLo,mHi] = inkSpan(transportWord(cfg.transport)+' ['+cfg.eq+']');
+  const metaTop = (L.metaTop!=null) ? L.metaTop
+                : Math.round((L.bodyY0 + titleInkBottom - mLo - mHi)/2);
+  drawText(buf,transportWord(cfg.transport),metaTop,RULE,'left',content_x0,content_x1);
+  drawText(buf,'['+cfg.eq+']',metaTop,RULE,'right',content_x0,content_x1);
+
+  if(cfg.face==='lyrics') lyricBody(buf,cfg.lines,L); else spectrumBody(buf,L);
+  bar(buf,cfg.mode,cfg.elapsed,cfg.length,L);
+
+  // 逻辑帧 240×160 以 ×3 最近邻放大；cfg.grid 时每格右下 1/3 列/行与纸色 50% 混合
+  const ramp=cfg.ramp, cv=document.getElementById('panel'), ctx=cv.getContext('2d');
+  const img=ctx.createImageData(720,480);
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    const col=ramp[buf[y*W+x]];
+    for(let sy=0;sy<S;sy++) for(let sx=0;sx<S;sx++){
+      let c=col;
+      if(cfg.grid){ const cut=2*S/3; if(sy>=cut||sx>=cut){ c=[(c[0]+ramp[0][0])>>1,(c[1]+ramp[0][1])>>1,(c[2]+ramp[0][2])>>1]; } }
+      const dx=x*S+sx, dy=y*S+sy, idx=(dy*720+dx)*4;
+      img.data[idx]=c[0]; img.data[idx+1]=c[1]; img.data[idx+2]=c[2]; img.data[idx+3]=255;
+    }
+  }
+  ctx.putImageData(img,0,0);
+  return cv.toDataURL('image/png');
+}
+window.renderPanel=renderPanel;
+</script>
+</body>
+</html>

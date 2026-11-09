@@ -1,0 +1,14 @@
+[package]
+name = "render_palettes"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# 只依赖 slot-ui（普通依赖，不触发 slot-ui 的 dev-dependency slot-gfx/test-support，
+# 后者会拉 host → libloading，在缺 as.exe 的沙箱里 link 不出来）。本工具只调 slot_ui::lcd
+# 的真函数把面板渲成 PNG，不需要窗口/音频后端。
+[dependencies]
+slot-ui = { path = "../slot-ui" }
+# png 已是 workspace 依赖（slot-ui 解码用），离线可用，纯 Rust 实现（flate2/miniz_oxide），
+# 不需要 as.exe / libloading，沙箱里能直接 link。
+png = { workspace = true }
