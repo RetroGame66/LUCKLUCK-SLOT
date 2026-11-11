@@ -307,6 +307,13 @@ mod words {
     pub const WIFI_HINT_STATUS: &str = "A scan    X by hand    Y delete    B back";
     pub const WIFI_HINT_LIST: &str = "Up and down to choose    A pick    B back";
     pub const WIFI_HINT_EDIT: &str = "A types    B erases    L/R layer    START done";
+
+    /// ★ 2026-11-11: the shelf's first-letter search (SELECT+Y). Four fixed lines, kept
+    /// short enough for the panel's 640 px column — the grid's own glyphs spell the query.
+    pub const SEARCH_TITLE: &str = "Search";
+    pub const SEARCH_HINT_GRID: &str = "D-PAD pick    A type    B erase    L/R layer";
+    pub const SEARCH_HINT_ACT: &str = "X all    START apply    MENU cancel";
+    pub const SEARCH_EMPTY: &str = "No matching carts";
 }
 
 #[cfg(not(feature = "lang-en"))]
@@ -563,6 +570,12 @@ mod words {
     pub const WIFI_HINT_STATUS: &str = "A 扫描    X 手动输入    Y 删除    B 返回";
     pub const WIFI_HINT_LIST: &str = "上下选择    A 确定    X 手动    B 返回";
     pub const WIFI_HINT_EDIT: &str = "A 输入    B 退格    L/R 换层    START 完成";
+
+    /// ★ 2026-11-11：货架首字母搜索（SELECT+Y）。四句都是定句，输入串用网格字形拼。
+    pub const SEARCH_TITLE: &str = "搜索游戏";
+    pub const SEARCH_HINT_GRID: &str = "方向键 选字    A 输入    B 退格    L/R 换层";
+    pub const SEARCH_HINT_ACT: &str = "X 全部    START 应用    MENU 取消";
+    pub const SEARCH_EMPTY: &str = "没有匹配的游戏";
 }
 
 pub use words::*;

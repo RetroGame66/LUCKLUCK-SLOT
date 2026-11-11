@@ -656,6 +656,13 @@ impl Shelf {
         self.held = None;
     }
 
+    /// ★ 2026-11-11：给 App 层的搜索浮层做**进入前视图快照**。`view` 是私有的：
+    /// 它是这一行自己怎么画的事实，别处只该借用、不该改。搜索退出时拿这份快照
+    /// `set_view` 复原，收藏夹 / 子文件夹 / 机种货架叠加的状态就一个都不会丢。
+    pub fn view_snapshot(&self) -> Vec<usize> {
+        self.view.clone()
+    }
+
     /// The carts the row is actually drawing, as indices into `carts`.
     ///
     /// This is the set a build has to cover, and it is **not** the same thing as a contiguous

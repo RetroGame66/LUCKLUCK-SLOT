@@ -550,9 +550,13 @@ const LETTERS: &[u8] = b"YDQWZSSXJBYGCZQPSQBYCDSCDLYSGGYQZFCLZWDWZLJPNJTMYZWZHFL
 /// Snowboarding` under `1` bought a facet on the shelf's ring for a title nobody looks for by
 /// number, and the ring is a dial a hand crosses, so a facet has to be worth the crossing.
 pub fn initial(title: &str) -> char {
-    let Some(c) = title.chars().next() else {
-        return '#';
-    };
+    title.chars().next().map(letter_of).unwrap_or('#')
+}
+
+/// ★ 2026-11-11：**单个字符**的首字母。`initial()` 是「整串只看第一个字」，
+/// 首字母搜索要逐字走（`search::initials`），把查表这一步拆出来给两边共用，
+/// 免得那一路为每个汉字临时造一个 `String`。行为与原来的 `initial` 逐字一致。
+pub fn letter_of(c: char) -> char {
     if c.is_ascii_alphabetic() {
         return c.to_ascii_uppercase();
     }

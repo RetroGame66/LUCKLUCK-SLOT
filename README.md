@@ -88,6 +88,7 @@ LUCKLUCK SLOT turns a BaseOS handheld into a shelf of game carts. Beyond upstrea
   its own disc shelf.
 - **Saves in numbered slots**, plus a save-state browser that reaches every cart, and cheats that
   live with the cart rather than in one global file.
+- **Search by initials** — `SELECT`+`Y` on the shelf opens a full keyboard; type pinyin initials (`cjjq` for 超级机器人大战) or any part of a game's own name and the shelf narrows as you type. `X` restores all carts, `START` applies, `MENU` cancels.
 - **Your own boot picture and a boot opening** — pick the still picture from `Bootlogos/` in Settings, then a `.slotvid` animation plays between that picture and the shelf's first frame. Both can be replaced; see the section below.
 - **MTP and Wi-Fi direct connect** — the card appears in Explorer plugged in, or is reachable over
   sftp on the same network without pulling it.
@@ -175,11 +176,14 @@ A `+` means both together. The full, always-current list is on the device: **MEN
 | Tap `Y` | Switch subfolder — and, on the music side, between tapes and games |
 | Hold `Y` | Pick the machine's shelf (the blind comes down, the picker floats on it) |
 | Hold `B` | Direct connect: the card's Wi-Fi comes up, the screen shows an address, a PC reaches it over sftp — no need to pull the card |
+| `SELECT` + `Y` | Search by initials — full keyboard; pinyin initials or a literal substring, filtered as you type |
 | `START` | Pick the core for this cart |
 | `MENU` | Main menu (and the shortcut card under it) |
 | `SELECT` + `START` | Day / night theme |
 | `SELECT` + `R1` | Interface palette (7) |
 | `SELECT` + `VOL+` / `VOL-` | Audio-latency profile |
+
+**How search works**: four layers (`abc / ABC / 123 / #+=`), `L1` / `R1` change layer, the D-pad moves the caret, `A` types, `B` erases. `X` clears the query and restores the full shelf, `START` keeps the filtered shelf and leaves, `MENU` cancels and restores whatever view was up before (favourites, a subfolder, a machine shelf). No matches keeps the previous results and says so instead of handing the shelf an empty view. The pinyin table holds one reading per hanzi, so the other reading of a polyphonic character is not found.
 
 ### In game — common to every machine
 
